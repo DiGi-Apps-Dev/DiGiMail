@@ -1050,8 +1050,8 @@ Future<String?> _askWord(BuildContext context, {required bool twice}) {
           ),
           TextButton(
             onPressed: () {
-              if (a.text.length < 10) {
-                set(() => err = 'Almeno 10 caratteri.');
+              if (a.text.length < 8) {
+                set(() => err = 'Almeno 8 caratteri.');
               } else if (twice && a.text != b.text) {
                 set(() => err = 'Le due parole non sono uguali.');
               } else {
@@ -1089,7 +1089,7 @@ class _BackupScreenState extends State<BackupScreen> {
       final bytes = await compute(_sealJob, [data, word]);
       final now = DateTime.now();
       final name =
-          'digimail-copia-${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}.digimail';
+          'digimail-copia-${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}-${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}.digimail';
       final f = File('${(await getTemporaryDirectory()).path}/$name');
       await f.writeAsBytes(bytes, flush: true);
       final n = (data['caselle'] as List).length;
