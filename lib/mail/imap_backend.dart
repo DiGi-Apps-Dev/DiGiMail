@@ -969,11 +969,13 @@ class ImapBackend implements MailBackend {
 
   @override
   Future<UndoFn> delete(String folder, List<int> uids) => _azione(() async {
+    // Prima ci si collega: l'elenco delle cartelle si legge alla connessione, e dal tasto
+    // della notifica (processo nuovo) è ancora vuoto.
+    final c = await _select(folder);
     // Senza Cestino la libreria marca soltanto: l'email ricompariva e poi spariva senza Annulla.
     if (_byRole('trash') == null) {
       throw StateError('Questa casella non ha una cartella Cestino.');
     }
-    final c = await _select(folder);
     final res = await c.deleteMessages(
       _seq(uids),
       expunge: _box(folder)?.isTrash ?? false,
@@ -984,15 +986,16 @@ class ImapBackend implements MailBackend {
   });
 
   Future<UndoFn> _moveRole(String folder, List<int> uids, String role) async {
-    final target = _byRole(role);
-    if (target == null)
-      throw StateError(
-        role == 'archive'
-            ? 'Questa casella non ha una cartella Archivio.'
-            : 'Cartella mancante: $role',
-      );
     return _azione(() async {
       final c = await _select(folder);
+      final target = _byRole(role);
+      if (target == null) {
+        throw StateError(
+          role == 'archive'
+              ? 'Questa casella non ha una cartella Archivio.'
+              : 'Cartella mancante: $role',
+        );
+      }
       final res = await c.moveMessages(_seq(uids), target);
       return () => _azione(() async {
         await c.undoMoveMessages(res);
@@ -1010,10 +1013,10 @@ class ImapBackend implements MailBackend {
 
   @override
   Future<UndoFn> notSpam(String folder, List<int> uids) async {
-    final inbox = _byRole('inbox');
-    if (inbox == null) throw StateError('Posta in arrivo non trovata.');
     return _azione(() async {
       final c = await _select(folder);
+      final inbox = _byRole('inbox');
+      if (inbox == null) throw StateError('Posta in arrivo non trovata.');
       final res = await c.moveMessages(_seq(uids), inbox);
       return () => _azione(() async {
         await c.undoMoveMessages(res);
@@ -1027,10 +1030,10 @@ class ImapBackend implements MailBackend {
     List<int> uids,
     String targetPath,
   ) async {
-    final target = _box(targetPath);
-    if (target == null) throw StateError('Cartella non trovata.');
     return _azione(() async {
       final c = await _select(folder);
+      final target = _box(targetPath);
+      if (target == null) throw StateError('Cartella non trovata.');
       final res = await c.moveMessages(_seq(uids), target);
       return () => _azione(() async {
         await c.undoMoveMessages(res);
