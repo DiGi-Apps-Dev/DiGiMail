@@ -207,7 +207,9 @@ class _SenderAvatarState extends State<SenderAvatar> {
 /// Numero delle non lette: pallino rosso con il numero in bianco.
 class CountBadge extends StatelessWidget {
   final int n;
-  const CountBadge(this.n, {super.key});
+  /// Su uno sfondo rosa pieno (casella aperta nel menu): pallino bianco, numero rosa.
+  final bool suPieno;
+  const CountBadge(this.n, {super.key, this.suPieno = false});
   @override
   Widget build(BuildContext context) {
     if (n <= 0) return const SizedBox.shrink();
@@ -218,7 +220,7 @@ class CountBadge extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 7),
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: kBluIcone,
+        color: suPieno ? Colors.white : kBluIcone,
         borderRadius: BorderRadius.circular(13),
       ),
       child: Text(
@@ -229,8 +231,8 @@ class CountBadge extends StatelessWidget {
           applyHeightToFirstAscent: false,
           applyHeightToLastDescent: false,
         ),
-        style: const TextStyle(
-          color: Colors.black,
+        style: TextStyle(
+          color: suPieno ? kBluIcone : Colors.white,
           fontWeight: FontWeight.w900,
           fontSize: 14,
           height: 1.0,

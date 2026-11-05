@@ -643,7 +643,7 @@ class _MessageScreenState extends State<MessageScreen> {
     final sus = Ops.suspicion(m);
     final canUnsub = Ops.canUnsubscribe(m);
     return Scaffold(
-      appBar: AppBar(
+      appBar: AppBar(flexibleSpace: const BrandBar(), 
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.pop(context),
@@ -942,12 +942,10 @@ class _MessageScreenState extends State<MessageScreen> {
             ),
             Container(
               decoration: BoxDecoration(
-                color: Theme.of(context).brightness == Brightness.dark
-                    ? null
-                    : kBarra,
-                border: const Border(top: BorderSide(color: kBordo)),
+                gradient: kBarraGrad,
+                border: const Border(top: BorderSide(color: kContorno, width: 3)),
               ),
-              child: Row(
+              child: IconTheme.merge(data: const IconThemeData(color: Colors.white), child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
                   for (final act in tb)
@@ -958,7 +956,7 @@ class _MessageScreenState extends State<MessageScreen> {
                       onPressed: () => _act(act),
                     ),
                 ],
-              ),
+              )),
             ),
           ],
         ),

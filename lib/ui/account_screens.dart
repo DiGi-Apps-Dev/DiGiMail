@@ -363,12 +363,12 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
     final x = a;
     if (x == null)
       return Scaffold(
-        appBar: AppBar(),
+        appBar: AppBar(flexibleSpace: const BrandBar()),
         body: const Center(child: CircularProgressIndicator()),
       );
     final s = Settings.i;
     return Scaffold(
-      appBar: AppBar(title: Text(x.name.isEmpty ? x.address : x.name)),
+      appBar: AppBar(flexibleSpace: const BrandBar(), title: Text(x.name.isEmpty ? x.address : x.name)),
       body: ListView(
         children: [
           Padding(
@@ -826,7 +826,7 @@ class _SignatureScreenState extends State<SignatureScreen> {
   Widget build(BuildContext context) {
     final fg = Theme.of(context).colorScheme.onSurface;
     return Scaffold(
-      appBar: AppBar(
+      appBar: AppBar(flexibleSpace: const BrandBar(), 
         title: const Text('Firma'),
         actions: [
           TextButton(
@@ -967,7 +967,7 @@ class _BlockedScreenState extends State<BlockedScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
+      appBar: AppBar(flexibleSpace: const BrandBar(), 
         title: const Text('Mittenti bloccati'),
         actions: [IconButton(icon: const Icon(Icons.add), onPressed: _add)],
       ),
@@ -1082,7 +1082,7 @@ class _SubscriptionsScreenState extends State<SubscriptionsScreen> {
     return DefaultTabController(
       length: 2,
       child: Scaffold(
-        appBar: AppBar(
+        appBar: AppBar(flexibleSpace: const BrandBar(), 
           title: const Text('Abbonamenti'),
           bottom: const TabBar(
             tabs: [
@@ -1281,7 +1281,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     }
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: AppBar(flexibleSpace: const BrandBar(), 
         title: const Text('Stato notifiche'),
         actions: [
           IconButton(icon: const Icon(Icons.refresh), onPressed: _load),

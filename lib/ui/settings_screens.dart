@@ -77,7 +77,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Impostazioni')),
+      appBar: AppBar(flexibleSpace: const BrandBar(), title: const Text('Impostazioni')),
       body: ListView(
         children: [
           const Etichetta('Caselle'),
@@ -250,7 +250,7 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
   Widget build(BuildContext context) {
     final defAcc = _acc.where((a) => a.id == s.defaultAccountId).firstOrNull;
     return Scaffold(
-      appBar: AppBar(title: const Text('Generale')),
+      appBar: AppBar(flexibleSpace: const BrandBar(), title: const Text('Generale')),
       body: ListView(
         children: [
           const Etichetta('Scrittura'),
@@ -479,7 +479,7 @@ class _GesturesScreenState extends State<GesturesScreen> {
   Widget build(BuildContext context) {
     final tb = s.toolbar;
     return Scaffold(
-      appBar: AppBar(title: const Text('Gesti e barra azioni')),
+      appBar: AppBar(flexibleSpace: const BrandBar(), title: const Text('Gesti e barra azioni')),
       body: ListView(
         children: [
           const Etichetta('Scorri a destra'),
@@ -602,7 +602,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   Widget build(BuildContext context) {
     final q = s.quietHours;
     return Scaffold(
-      appBar: AppBar(title: const Text('Notifiche')),
+      appBar: AppBar(flexibleSpace: const BrandBar(), title: const Text('Notifiche')),
       body: ListView(
         children: [
           const Etichetta('Avvisi'),
@@ -746,7 +746,7 @@ class _PrivacyScreenState extends State<PrivacyScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Sicurezza e privacy')),
+      appBar: AppBar(flexibleSpace: const BrandBar(), title: const Text('Sicurezza e privacy')),
       body: ListView(
         children: [
           const Etichetta('Blocco dell\'app'),
@@ -917,7 +917,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('IA con Cloudflare')),
+      appBar: AppBar(flexibleSpace: const BrandBar(), title: const Text('IA con Cloudflare')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -1147,7 +1147,7 @@ class _BackupScreenState extends State<BackupScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Copia e ripristino')),
+      appBar: AppBar(flexibleSpace: const BrandBar(), title: const Text('Copia e ripristino')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [

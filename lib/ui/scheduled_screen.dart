@@ -87,7 +87,7 @@ class _ScheduledScreenState extends State<ScheduledScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Programmati')),
+      appBar: AppBar(flexibleSpace: const BrandBar(), title: const Text('Programmati')),
       body: _rows.isEmpty
           ? const Center(
               child: Padding(

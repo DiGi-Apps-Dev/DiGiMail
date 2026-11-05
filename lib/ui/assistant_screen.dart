@@ -1,3 +1,4 @@
+import '../theme.dart';
 import 'package:flutter/material.dart';
 
 import '../categories.dart';
@@ -50,7 +51,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Assistente')),
+      appBar: AppBar(flexibleSpace: const BrandBar(), title: const Text('Assistente')),
       body: !_loaded
           ? const Center(child: CircularProgressIndicator())
           : ListView(
@@ -137,7 +138,7 @@ class _CatList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(catLabel[cat]!)),
+      appBar: AppBar(flexibleSpace: const BrandBar(), title: Text(catLabel[cat]!)),
       body: msgs.isEmpty
           ? const Center(
               child: Text(
@@ -222,7 +223,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Rubrica suggerita')),
+      appBar: AppBar(flexibleSpace: const BrandBar(), title: const Text('Rubrica suggerita')),
       body: Column(
         children: [
           Padding(

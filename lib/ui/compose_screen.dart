@@ -838,7 +838,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
         if (await _confirmLeave()) nav.pop();
       },
       child: Scaffold(
-        appBar: AppBar(
+        appBar: AppBar(flexibleSpace: const BrandBar(), 
           title: const Text('Nuova email'),
           actions: [
             IconButton(

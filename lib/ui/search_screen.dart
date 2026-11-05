@@ -178,7 +178,7 @@ class _SearchScreenState extends State<SearchScreen> {
   Widget build(BuildContext context) {
     final inOne = widget.accountId != null ? _accounts[widget.accountId] : null;
     return Scaffold(
-      appBar: AppBar(
+      appBar: AppBar(flexibleSpace: const BrandBar(), 
         title: TextField(
           controller: _ctl,
           autofocus: true,

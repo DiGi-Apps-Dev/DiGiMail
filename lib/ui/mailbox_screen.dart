@@ -573,11 +573,7 @@ class _MailboxScreenState extends State<MailboxScreen>
     return Padding(
       padding: const EdgeInsets.only(right: 8),
       child: Material(
-        color: cur
-            ? (Theme.of(context).brightness == Brightness.dark
-                  ? const Color(0xFF4A3420)
-                  : const Color(0xFFFFE9D6))
-            : Colors.transparent,
+        color: cur ? kAccento : Colors.transparent,
         borderRadius: const BorderRadius.horizontal(right: Radius.circular(28)),
         // Tocco sul nome: Posta in arrivo di quell'account. Tocco sulla freccia: apre le cartelle.
         child: InkWell(
@@ -606,13 +602,15 @@ class _MailboxScreenState extends State<MailboxScreen>
                     style: TextStyle(
                       fontSize: 17,
                       fontWeight: cur ? FontWeight.w800 : FontWeight.w400,
+                      letterSpacing: 0.15,
+                      color: cur ? Colors.white : null,
                     ),
                   ),
                 ),
                 if (n > 0)
                   Padding(
                     padding: const EdgeInsets.only(right: 6),
-                    child: CountBadge(n),
+                    child: CountBadge(n, suPieno: cur),
                   ),
                 InkWell(
                   key: ValueKey('chevron-${x.id}'),
@@ -624,6 +622,7 @@ class _MailboxScreenState extends State<MailboxScreen>
                     child: Icon(
                       open ? Icons.expand_less : Icons.expand_more,
                       size: 28,
+                      color: cur ? Colors.white : null,
                     ),
                   ),
                 ),
@@ -850,11 +849,14 @@ class _MailboxScreenState extends State<MailboxScreen>
 
   Widget _drawer() {
     final fg = Theme.of(context).colorScheme.onSurface;
-    const label = TextStyle(fontSize: 18);
+    const label = TextStyle(fontSize: 18, letterSpacing: 0.15);
     return Drawer(
       width: MediaQuery.of(context).size.width * 0.89,
       backgroundColor: Theme.of(context).colorScheme.surface,
-      child: SafeArea(
+      // Voci del menu con la stessa spaziatura delle lettere del menu di DiGiCal.
+      child: DefaultTextStyle.merge(
+        style: const TextStyle(letterSpacing: 0.15),
+        child: SafeArea(
         top: false,
         child: ListView(
           padding: EdgeInsets.zero,
@@ -862,19 +864,18 @@ class _MailboxScreenState extends State<MailboxScreen>
             // Testata arancione a tutta larghezza, come la barra in alto.
             Container(
               width: double.infinity,
-              color: Theme.of(context).brightness == Brightness.dark
-                  ? Colors.transparent
-                  : kBarra,
+              decoration: const BoxDecoration(gradient: kBarraGrad, border: Border(bottom: BorderSide(color: kContorno, width: 3))),
               padding: EdgeInsets.fromLTRB(
                 16,
                 MediaQuery.of(context).padding.top + 20,
                 16,
                 14,
               ),
-              child: const Text(
-                'MAILBOX',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
-              ),
+              child: Row(children: [
+                ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.asset('assets/icon.png', width: 56, height: 56)),
+                const SizedBox(width: 12),
+                const Marchio(),
+              ]),
             ),
             for (final x in _accounts) ...[
               _accountRow(x),
@@ -973,6 +974,7 @@ class _MailboxScreenState extends State<MailboxScreen>
           ],
         ),
       ),
+      ),
     );
   }
 
@@ -980,7 +982,7 @@ class _MailboxScreenState extends State<MailboxScreen>
     if (_selecting) {
       final sel = _selected;
       final canSpamBack = _role == 'junk';
-      return AppBar(
+      return AppBar(flexibleSpace: const BrandBar(), 
         leading: IconButton(
           icon: const Icon(Icons.close),
           onPressed: () => setState(_sel.clear),
@@ -1061,7 +1063,7 @@ class _MailboxScreenState extends State<MailboxScreen>
         ],
       );
     }
-    return AppBar(
+    return AppBar(flexibleSpace: const BrandBar(), 
       // Tocco sul titolo: elenco delle cartelle di questa casella, per cambiare senza il menu.
       title: InkWell(
         key: const ValueKey('titolo-cartelle'),
@@ -1332,7 +1334,7 @@ class _MsgTile extends StatelessWidget {
                                       : msg.sender,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(fontSize: 16, fontWeight: w),
+                                  style: TextStyle(fontSize: 17, fontWeight: w),
                                 ),
                               ),
                               // Graffetta subito dopo il mittente, piccola e grigia come Edison.

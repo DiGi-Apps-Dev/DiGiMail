@@ -58,7 +58,7 @@ class _RulesScreenState extends State<RulesScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Regole automatiche')),
+      appBar: AppBar(flexibleSpace: const BrandBar(), title: const Text('Regole automatiche')),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _edit(null),
         icon: const Icon(Icons.add),
@@ -162,7 +162,7 @@ class _RuleEditorState extends State<RuleEditor> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
+      appBar: AppBar(flexibleSpace: const BrandBar(), 
         title: const Text('Regola'),
         actions: [
           TextButton(

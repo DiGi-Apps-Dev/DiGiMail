@@ -273,7 +273,7 @@ class _AddAccountScreenState extends State<AddAccountScreen> {
   Widget build(BuildContext context) {
     final g = _guess;
     return Scaffold(
-      appBar: AppBar(title: const Text('Aggiungi account')),
+      appBar: AppBar(flexibleSpace: const BrandBar(), title: const Text('Aggiungi account')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
         children: [
