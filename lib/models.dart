@@ -142,6 +142,12 @@ class Msg {
   String refs;
   String? bodyText;
   String? bodyHtml;
+
+  /// Il testo è già salvato sul telefono (gli elenchi non lo leggono: [Db.conCorpo]).
+  bool hasBody;
+
+  /// Inizio del testo semplice, per la ricerca dell'assistente negli elenchi.
+  String bodyHead;
   DateTime? snoozedUntil;
 
   Msg({
@@ -167,8 +173,10 @@ class Msg {
     this.refs = '',
     this.bodyText,
     this.bodyHtml,
+    bool? hasBody,
+    this.bodyHead = '',
     this.snoozedUntil,
-  });
+  }) : hasBody = hasBody ?? (bodyText != null || bodyHtml != null);
 
   String get sender => fromName.isNotEmpty ? fromName : fromAddr;
   String get key => '$accountId|$folder|$uid';
@@ -222,6 +230,13 @@ class Msg {
     refs: (r['refs'] ?? '') as String,
     bodyText: r['body_text'] as String?,
     bodyHtml: r['body_html'] as String?,
+    hasBody: r.containsKey('has_body')
+        ? (r['has_body'] ?? 0) == 1
+        : (r['body_text'] != null || r['body_html'] != null),
+    bodyHead: () {
+      final h = (r['body_head'] ?? r['body_text'] ?? '') as String;
+      return h.startsWith('@@DIGIMAIL-CORPO-IN-FILE@@') ? '' : h;
+    }(),
     snoozedUntil: r['snoozed_until'] == null
         ? null
         : DateTime.fromMillisecondsSinceEpoch(r['snoozed_until'] as int),

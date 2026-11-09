@@ -65,15 +65,11 @@ void main() {
     expect(SenderLogos.domainOf('n@mail.azienda.com'), 'azienda.com');
   });
 
-  test('testo sempre nero, sinistra e senza sfondi del mittente', () {
+  test("l'email resta com'è: colori, allineamento e sfondi del mittente", () {
     const html =
-        '<div style="color:#999;background-color:#eee;text-align:center;line-height:40px;font-size:14px">Ciao</div><font color="red">x</font><td bgcolor="#000" align="center">y</td>';
+        '<div style="color:#999;background-color:#eee;text-align:center">Ciao</div><td bgcolor="#000" align="center">y</td>';
     final out = Ops.cleanHtml(html, blockImages: false, blockTracking: true).html;
-    expect(out, isNot(contains('color')));
-    expect(out, isNot(contains('text-align')));
-    expect(out, isNot(contains('line-height')));
-    expect(out, isNot(contains('align=')));
-    expect(out, contains('font-size:14px'));
+    expect(out, html);
   });
 
   test('i gesti non danno mai «archivia»', () async {

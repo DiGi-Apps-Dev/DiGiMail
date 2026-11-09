@@ -3,8 +3,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart'
-    show HtmlWidget;
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -21,6 +19,7 @@ import '../settings.dart';
 import '../theme.dart';
 import 'settings_screens.dart';
 import 'compose_screen.dart';
+import 'email_web.dart';
 import 'pickers.dart';
 import 'widgets.dart';
 
@@ -46,20 +45,63 @@ class MessageScreen extends StatefulWidget {
 }
 
 class _SfogliaState extends State<MessageScreen> {
-  late final int _inizio = widget.siblings.indexWhere(
-    (x) => x.key == widget.msg.key,
-  );
+  /// Le pagine: parte dall'elenco ricevuto e segue la copia locale, così un'email tolta
+  /// altrove (dal PC, da una regola) non resta come pagina su cui scorrere.
+  late List<Msg> _lista = List.of(widget.siblings);
+  late final int _inizio = _lista.indexWhere((x) => x.key == widget.msg.key);
   late final PageController _pc = PageController(
     initialPage: _inizio < 0 ? 0 : _inizio,
   );
   late int _corrente = _inizio;
-  final _chiavi = <int, GlobalKey<_LetturaState>>{};
-  GlobalKey<_LetturaState> _chiave(int i) =>
-      _chiavi.putIfAbsent(i, () => GlobalKey<_LetturaState>());
-  _LetturaState? get _davanti => _chiavi[_corrente]?.currentState;
+  final _chiavi = <String, GlobalKey<_LetturaState>>{};
+  GlobalKey<_LetturaState> _chiave(Msg m) =>
+      _chiavi.putIfAbsent(m.key, () => GlobalKey<_LetturaState>());
+  _LetturaState? get _davanti => _corrente < 0 || _corrente >= _lista.length
+      ? null
+      : _chiavi[_lista[_corrente].key]?.currentState;
+  StreamSubscription<void>? _sub;
+  Timer? _debounce;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_inizio >= 0) {
+      _sub = Db.i.changes.listen((_) {
+        _debounce?.cancel();
+        _debounce = Timer(const Duration(milliseconds: 300), _allinea);
+      });
+    }
+  }
+
+  /// Toglie dalle pagine le email che non sono più nella copia locale (quella davanti resta,
+  /// anche se sparita: la sta leggendo).
+  Future<void> _allinea() async {
+    if (!mounted || _corrente < 0 || _corrente >= _lista.length) return;
+    final davanti = _lista[_corrente];
+    final vive = <String>{};
+    for (final f in {for (final m in _lista) m.folder}) {
+      for (final m in await Db.i.messages(widget.account.id!, f, limit: 5000)) {
+        vive.add(m.key);
+      }
+    }
+    if (!mounted) return;
+    final nuova = [
+      for (final m in _lista)
+        if (m.key == davanti.key || vive.contains(m.key)) m,
+    ];
+    if (nuova.length == _lista.length) return;
+    final i = nuova.indexWhere((m) => m.key == davanti.key);
+    setState(() {
+      _lista = nuova;
+      _corrente = i;
+    });
+    if (_pc.hasClients && _pc.page?.round() != i) _pc.jumpToPage(i);
+  }
 
   @override
   void dispose() {
+    _debounce?.cancel();
+    _sub?.cancel();
     _pc.dispose();
     super.dispose();
   }
@@ -131,7 +173,7 @@ class _SfogliaState extends State<MessageScreen> {
       controller: _pc,
       // Prepara la seguente e la precedente mentre si legge questa.
       allowImplicitScrolling: true,
-      itemCount: widget.siblings.length,
+      itemCount: _lista.length,
       onPageChanged: (i) => setState(() => _corrente = i),
       // Ogni email ha la sua barra: gli avvisi in basso compaiono in tutte, ma
       // l'animazione la fa solo quella davanti (altrimenti Flutter si ferma).
@@ -144,10 +186,10 @@ class _SfogliaState extends State<MessageScreen> {
           child: HeroMode(
             enabled: i == _corrente,
             child: _Lettura(
-              key: _chiave(i),
+              key: _chiave(_lista[i]),
               incorporata: true,
               account: widget.account,
-              msg: widget.siblings[i],
+              msg: _lista[i],
               folders: widget.folders,
               attiva: i == _corrente,
             ),
@@ -661,69 +703,48 @@ class _LetturaState extends State<_Lettura> {
     return t;
   }
 
+  /// Il corpo dell'email, nel motore del browser. Anche il solo testo passa da lì, così
+  /// zoom e scorrimento sono gli stessi per tutte le email.
   Widget _body() {
-    final fg = Theme.of(context).colorScheme.onSurface;
     final s = Settings.i;
     final html = m.bodyHtml ?? '';
-    if (html.trim().isNotEmpty) {
-      final cleaned = Ops.cleanHtml(
-        html,
-        blockImages: s.blockRemoteImages && !_showImages,
-        blockTracking: s.blockTracking,
-      );
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (s.blockRemoteImages && !_showImages && cleaned.blocked > 0)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: OutlinedButton.icon(
-                icon: const Icon(Icons.image_outlined),
-                label: const Text('Mostra le immagini'),
-                onPressed: () => setState(() => _showImages = true),
-              ),
-            ),
-          HtmlWidget(
-            linkify(cleaned.html),
-            textStyle: TextStyle(
-              fontFamily: 'RobotoLight',
-              fontSize: 17,
-              color: fg,
-              height: 1.62,
-            ),
-            // Outlook toglie lo spazio fra i paragrafi con un suo stile: qui va rifatto.
-            customStylesBuilder: (e) =>
-                e.localName == 'p' && e.classes.contains('MsoNormal')
-                ? {'margin': '0'}
-                : null,
-            onTapUrl: _openUrl,
+    if (html.trim().isEmpty) {
+      if (_plain.isEmpty) {
+        return const Padding(
+          padding: EdgeInsets.all(16),
+          child: Text(
+            '(messaggio vuoto)',
+            style: TextStyle(fontFamily: 'RobotoLight', fontSize: 17, height: 1.62),
           ),
-        ],
-      );
-    }
-    if (_plain.isEmpty) {
-      return Text(
-        '(messaggio vuoto)',
-        style: TextStyle(
-          fontFamily: 'RobotoLight',
-          fontSize: 17,
-          color: fg,
-          height: 1.62,
-        ),
-      );
-    }
-    return SelectionArea(
-      child: HtmlWidget(
-        plainToHtml(_plain),
-        textStyle: TextStyle(
-          fontFamily: 'RobotoLight',
-          fontSize: 17,
-          color: fg,
-          height: 1.62,
-        ),
+        );
+      }
+      return EmailWeb(
+        html:
+            '<div style="font-family:sans-serif-light,sans-serif;font-size:17px;line-height:1.62;padding:0 16px 24px">${plainToHtml(_plain)}</div>',
         onTapUrl: _openUrl,
-      ),
+        onScorsa: _scorsa,
+      );
+    }
+    final cleaned = Ops.cleanHtml(
+      html,
+      blockImages: s.blockRemoteImages && !_showImages,
+      blockTracking: s.blockTracking,
     );
+    _immaginiBloccate = s.blockRemoteImages && !_showImages && cleaned.blocked > 0;
+    return EmailWeb(
+      html: linkify(cleaned.html),
+      onTapUrl: _openUrl,
+      onScorsa: _scorsa,
+    );
+  }
+
+  bool _immaginiBloccate = false;
+
+  /// L'email è scorsa in giù: l'intestazione si stringe a oggetto e mittente, e torna
+  /// intera quando si risale in cima.
+  bool _compatta = false;
+  void _scorsa(bool giu) {
+    if (giu != _compatta && mounted) setState(() => _compatta = giu);
   }
 
   /// Un tocco su un link: un indirizzo email apre Scrivi, un numero la chiamata,
@@ -885,196 +906,222 @@ class _LetturaState extends State<_Lettura> {
     );
   }
 
-  /// Il contenuto dell'email, la sola parte che scorre fra un'email e l'altra.
+  /// Il contenuto dell'email: in alto oggetto, mittente, avvisi e allegati (si stringono
+  /// quando l'email scorre in giù); sotto, l'email a tutto lo spazio, che scorre e si
+  /// ingrandisce da sola come in Gmail e K-9 Mail.
   Widget _corpo() {
     final sus = Ops.suspicion(m);
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-      children: [
-        Text(
-          m.subject.isEmpty ? '(senza oggetto)' : m.subject,
-          maxLines: 3,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontSize: 17,
-            fontWeight: FontWeight.w700,
-            height: 1.3,
-          ),
-        ),
-        const SizedBox(height: 8),
-        InkWell(
-          onTap: () => setState(() => _details = !_details),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SenderAvatar(m.sender, a.color, size: 40, addr: m.fromAddr),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text.rich(
-                      TextSpan(
-                        children: [
-                          TextSpan(
-                            text: m.sender,
-                            style: const TextStyle(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          TextSpan(
-                            text: '  ${formatDate(m.date)}',
-                            style: const TextStyle(fontSize: 14),
-                          ),
-                        ],
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            'A: ${_toLabel()}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 14),
-                          ),
-                        ),
-                        Icon(
-                          _details ? Icons.expand_less : Icons.expand_more,
-                          size: 24,
-                        ),
-                      ],
-                    ),
-                    if (_details) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        'Da: ${m.fromAddr}',
-                        style: const TextStyle(fontSize: 15),
-                      ),
-                      Text(
-                        'A: ${m.toAddrs.isEmpty ? a.address : m.toAddrs}',
-                        style: const TextStyle(fontSize: 15),
-                      ),
-                      if (m.ccAddrs.isNotEmpty)
-                        Text(
-                          'Cc: ${m.ccAddrs}',
-                          style: const TextStyle(fontSize: 15),
-                        ),
-                      Text(
-                        formatFull(m.date),
-                        style: const TextStyle(fontSize: 15),
-                      ),
-                    ],
-                  ],
-                ),
+    final altezzaMax = MediaQuery.sizeOf(context).height * 0.45;
+    final corpo = _loading
+        ? const Center(child: CircularProgressIndicator())
+        : _error != null
+        ? Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              _error!,
+              style: const TextStyle(
+                color: Color(0xFFB3261E),
+                fontWeight: FontWeight.w700,
+                fontSize: 16,
               ),
-            ],
-          ),
-        ),
-        if (sus != null)
-          Container(
-            margin: const EdgeInsets.only(top: 12),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFDECEA),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFB3261E)),
             ),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.warning_amber_rounded,
-                  color: Color(0xFFB3261E),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    sus,
+          )
+        : _body();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: altezzaMax),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+            child: AnimatedSize(
+              duration: const Duration(milliseconds: 180),
+              alignment: Alignment.topCenter,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    m.subject.isEmpty ? '(senza oggetto)' : m.subject,
+                    maxLines: _compatta ? 1 : 3,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                      fontSize: 15,
+                      fontSize: 17,
                       fontWeight: FontWeight.w700,
+                      height: 1.3,
                     ),
                   ),
-                ),
-              ],
-            ),
-          ),
-        if (_summarizing)
-          const Padding(
-            padding: EdgeInsets.only(top: 10),
-            child: LinearProgressIndicator(),
-          ),
-        if (_summary != null)
-          Container(
-            margin: const EdgeInsets.only(top: 10),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: kSfondoLeggero,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: SelectableText(
-              _summary!,
-              style: const TextStyle(fontSize: 16, height: 1.35),
-            ),
-          ),
-        if (_atts.isNotEmpty) ...[
-          const Divider(height: 24),
-          for (final att in _atts)
-            InkWell(
-              onTap: () => _download(att),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Row(
-                  children: [
-                    const Icon(Icons.description_outlined, size: 30),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            att.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 17),
-                          ),
-                          Text(
-                            formatSize(att.size),
-                            style: const TextStyle(fontSize: 15),
-                          ),
-                        ],
+                  if (_compatta)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2, bottom: 6),
+                      child: Text(
+                        '${m.sender}  ${formatDate(m.date)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 14),
                       ),
-                    ),
-                    const Icon(Icons.download, size: 30),
+                    )
+                  else ...[
+                    const SizedBox(height: 8),
+                    _intestazione(),
+                    if (sus != null) _avvisoSospetto(sus),
+                    if (_summarizing)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 10),
+                        child: LinearProgressIndicator(),
+                      ),
+                    if (_summary != null)
+                      Container(
+                        margin: const EdgeInsets.only(top: 10),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: kSfondoLeggero,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: SelectableText(
+                          _summary!,
+                          style: const TextStyle(fontSize: 16, height: 1.35),
+                        ),
+                      ),
+                    if (_atts.isNotEmpty) ...[
+                      const Divider(height: 16),
+                      for (final att in _atts) _rigaAllegato(att),
+                    ],
+                    if (_immaginiBloccate)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.image_outlined),
+                          label: const Text('Mostra le immagini'),
+                          onPressed: () => setState(() => _showImages = true),
+                        ),
+                      ),
+                    const SizedBox(height: 6),
                   ],
-                ),
+                ],
               ),
             ),
-        ],
-        const Divider(height: 28),
-        if (_loading)
-          const Padding(
-            padding: EdgeInsets.all(30),
-            child: Center(child: CircularProgressIndicator()),
-          )
-        else if (_error != null)
-          Text(
-            _error!,
-            style: const TextStyle(
-              color: Color(0xFFB3261E),
-              fontWeight: FontWeight.w700,
-              fontSize: 16,
-            ),
-          )
-        else
-          _body(),
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(child: corpo),
       ],
     );
   }
+
+  Widget _intestazione() => InkWell(
+    onTap: () => setState(() => _details = !_details),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SenderAvatar(m.sender, a.color, size: 40, addr: m.fromAddr),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text.rich(
+                TextSpan(
+                  children: [
+                    TextSpan(
+                      text: m.sender,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    TextSpan(
+                      text: '  ${formatDate(m.date)}',
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                  ],
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      'A: ${_toLabel()}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                  ),
+                  Icon(
+                    _details ? Icons.expand_less : Icons.expand_more,
+                    size: 24,
+                  ),
+                ],
+              ),
+              if (_details) ...[
+                const SizedBox(height: 4),
+                Text('Da: ${m.fromAddr}', style: const TextStyle(fontSize: 15)),
+                Text(
+                  'A: ${m.toAddrs.isEmpty ? a.address : m.toAddrs}',
+                  style: const TextStyle(fontSize: 15),
+                ),
+                if (m.ccAddrs.isNotEmpty)
+                  Text('Cc: ${m.ccAddrs}', style: const TextStyle(fontSize: 15)),
+                Text(formatFull(m.date), style: const TextStyle(fontSize: 15)),
+              ],
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _avvisoSospetto(String sus) => Container(
+    margin: const EdgeInsets.only(top: 12),
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: const Color(0xFFFDECEA),
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: const Color(0xFFB3261E)),
+    ),
+    child: Row(
+      children: [
+        const Icon(Icons.warning_amber_rounded, color: Color(0xFFB3261E)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            sus,
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _rigaAllegato(AttachmentInfo att) => InkWell(
+    onTap: () => _download(att),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          const Icon(Icons.description_outlined, size: 28),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  att.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 16),
+                ),
+                Text(formatSize(att.size), style: const TextStyle(fontSize: 14)),
+              ],
+            ),
+          ),
+          const Icon(Icons.download, size: 28),
+        ],
+      ),
+    ),
+  );
 }
 
 /// Barra in basso con le azioni scelte nelle impostazioni.

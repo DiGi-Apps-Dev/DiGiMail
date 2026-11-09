@@ -516,8 +516,10 @@ class _ComposeScreenState extends State<ComposeScreen> {
       );
       _dirty = false;
       _init.consumata = true;
-      await _dropOldDraft(_acc!);
       nav.pop();
+      // La bozza vecchia si toglie dal server dopo aver chiuso: aspettarla teneva Scrivi
+      // aperto fino a 30 s.
+      unawaited(_dropOldDraft(_acc!));
       Timer(Duration(seconds: undo + 1), () => Ops.processScheduled());
       messenger.showSnackBar(
         SnackBar(
@@ -551,8 +553,8 @@ class _ComposeScreenState extends State<ComposeScreen> {
       Ops.playSent();
       _dirty = false;
       _init.consumata = true;
-      await _dropOldDraft(_acc!);
       nav.pop();
+      unawaited(_dropOldDraft(_acc!));
       messenger.showSnackBar(
         SnackBar(content: Text(Ops.lastSendWarning ?? 'Email inviata')),
       );
@@ -603,11 +605,11 @@ class _ComposeScreenState extends State<ComposeScreen> {
     await Ops.queueSend(_acc!, _build(), at, compose: _compose());
     _dirty = false;
     _init.consumata = true;
-    await _dropOldDraft(_acc!);
     if (!mounted) return;
     final nav = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
     nav.pop();
+    unawaited(_dropOldDraft(_acc!));
     messenger.showSnackBar(
       SnackBar(
         content: Text(

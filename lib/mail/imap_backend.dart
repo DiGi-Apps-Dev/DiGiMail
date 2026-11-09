@@ -6,12 +6,14 @@ import 'dart:typed_data';
 import 'package:enough_mail/enough_mail.dart' as em;
 
 import '../db.dart';
+import '../linkify.dart';
 import '../models.dart';
 import '../settings.dart';
 import '../signature.dart';
 import 'backend.dart';
 import 'ms_oauth.dart';
 import 'secrets.dart';
+import 'testo_tollerante.dart';
 
 /// Il Message-ID senza virgolette e barre, che romperebbero la ricerca sul server.
 String idPerRicerca(String id) => id.replaceAll(RegExp(r'["\\]'), '');
@@ -55,9 +57,9 @@ Msg msgFromMime(int accountId, String folder, em.MimeMessage m) {
   final from = (m.from != null && m.from!.isNotEmpty) ? m.from!.first : null;
   String text = '';
   try {
-    text = m.decodeTextPlainPart() ?? '';
+    text = testoParte(m, html: false) ?? '';
     if (text.trim().isEmpty) {
-      final h = m.decodeTextHtmlPart();
+      final h = testoParte(m, html: true);
       if (h != null) text = _plainFromHtml(h);
     }
   } catch (_) {}
@@ -109,7 +111,10 @@ String _replyToOf(em.MimeMessage m) {
 /// sia «attachment» sia «inline» sia senza marcatura, tranne le immagini
 /// richiamate dentro il testo (cid). Vale sia per l'email intera sia per la
 /// sola struttura (BODYSTRUCTURE).
-List<em.ContentInfo> attachmentInfos(em.MimeMessage m) {
+List<em.ContentInfo> attachmentInfos(
+  em.MimeMessage m, {
+  Set<String> mostraCid = const {},
+}) {
   final all = <em.ContentInfo>[];
   try {
     final body = m.body;
@@ -138,11 +143,64 @@ List<em.ContentInfo> attachmentInfos(em.MimeMessage m) {
         i.contentDisposition?.disposition == em.ContentDisposition.attachment;
     if (name.isEmpty && !isAtt) continue;
     if (i.mediaType?.top == em.MediaToptype.multipart) continue;
-    if (!isAtt && i.isImage && (i.cid ?? '').isNotEmpty) continue;
+    if (!isAtt &&
+        i.isImage &&
+        (i.cid ?? '').isNotEmpty &&
+        !mostraCid.contains(pulisciCid(i.cid!))) {
+      continue;
+    }
     if (i.fetchId.isEmpty || !seen.add(i.fetchId)) continue;
     out.add(i);
   }
   return out;
+}
+
+String pulisciCid(String c) =>
+    c.trim().replaceAll(RegExp(r'^cid:', caseSensitive: false), '').replaceAll(RegExp(r'^<|>$'), '').toLowerCase();
+
+/// I «cid:» che il testo HTML richiama davvero.
+Set<String> cidUsati(String? html) => {
+  for (final m in RegExp(r'''cid:([^"'\s>)]+)''', caseSensitive: false).allMatches(html ?? ''))
+    pulisciCid(m.group(1)!),
+};
+
+/// Le immagini che [EmailWeb] mostra in fondo all'email (segnate al momento dell'apertura).
+Set<String> cidMessiInFondo(String? html) => {
+  for (final m in RegExp(r'data-digimail-allegato="([^"]+)"').allMatches(html ?? ''))
+    m.group(1)!,
+};
+
+/// Immagini con un «Content-ID» che il testo non usa.
+List<({String cid, String tipo, Uint8List dati})> immaginiNonUsate(
+  em.MimeMessage mime,
+  Set<String> usati,
+) {
+  final out = <({String cid, String tipo, Uint8List dati})>[];
+  final visti = <String>{};
+  for (final p in mime.allPartsFlat) {
+    try {
+      if (p.mediaType.top != em.MediaToptype.image) continue;
+      final cid = pulisciCid(p.getHeaderValue('content-id') ?? '');
+      if (cid.isEmpty || usati.contains(cid) || !visti.add(cid)) continue;
+      final dati = p.decodeContentBinary();
+      if (dati == null || dati.isEmpty) continue;
+      out.add((cid: cid, tipo: p.mediaType.text, dati: dati));
+    } catch (_) {}
+  }
+  return out;
+}
+
+/// Per il registro: tipo, disposizione e cid di ogni parte (niente contenuti).
+String descriviParti(em.MimeMessage mime) {
+  try {
+    return mime.allPartsFlat
+        .map((p) => '${p.mediaType.text}'
+            '${(p.getHeaderValue('content-disposition') ?? '').split(';').first.trim().isEmpty ? '' : '/${(p.getHeaderValue('content-disposition') ?? '').split(';').first.trim()}'}'
+            '${(p.getHeaderValue('content-id') ?? '').isEmpty ? '' : '/cid'}')
+        .join(',');
+  } catch (_) {
+    return '?';
+  }
 }
 
 class ImapBackend implements MailBackend {
@@ -344,6 +402,25 @@ class ImapBackend implements MailBackend {
 
   em.MessageSequence _seq(List<int> uids) =>
       em.MessageSequence.fromIds(uids, isUid: true);
+
+  /// Numeri già in ordine: quelli consecutivi diventano un intervallo («12:40»).
+  static em.MessageSequence _seqCompatta(List<int> ordinati) {
+    final s = em.MessageSequence(isUidSequence: true);
+    var i = 0;
+    while (i < ordinati.length) {
+      var j = i;
+      while (j + 1 < ordinati.length && ordinati[j + 1] == ordinati[j] + 1) {
+        j++;
+      }
+      if (j > i) {
+        s.addRange(ordinati[i], ordinati[j]);
+      } else {
+        s.add(ordinati[i]);
+      }
+      i = j + 1;
+    }
+    return s;
+  }
 
   @override
   Future<List<Folder>> folders() async {
@@ -554,11 +631,6 @@ class ImapBackend implements MailBackend {
         all.add(msgFromMime(accId, folder, m));
       }
     }
-    if (sel.messagesExists == 0) {
-      await db.pruneFolder(accId, folder, 0, {});
-      await db.setFolderSync(accId, folder, validity, lastUid);
-      return [];
-    }
     // Busta (mittente, oggetto, data) e struttura (allegati) nella stessa
     // richiesta: con la sola struttura il server non manda mittente e oggetto.
     print('DIGIMAIL-T sync $folder fetchSeq ${_s.elapsedMilliseconds}ms');
@@ -659,16 +731,24 @@ class ImapBackend implements MailBackend {
         _deepAt[folder] = DateTime.now();
         return;
       }
-      final res = await imap.uidFetchMessages(
-        _seq(uids),
-        '(UID FLAGS)',
-        responseTimeout: const Duration(seconds: 60),
-      );
-      final server = <int, ({bool seen, bool flagged, bool answered})>{
-        for (final m in res.messages)
-          if (m.uid != null)
-            m.uid!: (seen: m.isSeen, flagged: m.isFlagged, answered: m.isAnswered),
-      };
+      // A blocchi e con i numeri consecutivi scritti come intervalli: una riga con migliaia
+      // di numeri uno per uno, dopo molti scorrimenti, veniva rifiutata dal server in silenzio
+      // e l'allineamento con il PC non avveniva più.
+      final server = <int, ({bool seen, bool flagged, bool answered})>{};
+      uids.sort();
+      for (var i = 0; i < uids.length; i += 500) {
+        final blocco = uids.sublist(i, i + 500 > uids.length ? uids.length : i + 500);
+        final res = await imap.uidFetchMessages(
+          _seqCompatta(blocco),
+          '(UID FLAGS)',
+          responseTimeout: const Duration(seconds: 60),
+        );
+        for (final m in res.messages) {
+          if (m.uid != null) {
+            server[m.uid!] = (seen: m.isSeen, flagged: m.isFlagged, answered: m.isAnswered);
+          }
+        }
+      }
       // Una risposta vuota non cancella niente: potrebbe essere una risposta illeggibile.
       if (server.isNotEmpty) {
         await Db.i.reconcileOlder(accId, folder, belowUid, server);
@@ -681,30 +761,46 @@ class ImapBackend implements MailBackend {
   Future<void> loadOlder(String folder, {int count = 40}) =>
       _serial(() => _retry(() => _loadOlder(folder, count: count)));
 
+  /// Le email più vecchie di quelle in copia, per numero (UID): prima si contava
+  /// «quante ne ho già» e si chiedeva la posizione corrispondente, ma con dei buchi nella
+  /// copia (email tolte dallo storico, dalla pulizia o rimandate) la finestra era spostata e
+  /// mancavano email. Ora si chiede «tutto quello che sta sotto il numero più basso che ho»;
+  /// i numeri possono avere vuoti, quindi si allarga la finestra finché non ne arrivano
+  /// abbastanza o si tocca il numero 1.
   Future<void> _loadOlder(String folder, {int count = 40}) async {
     final c = await _c();
     final box = _box(folder);
     if (box == null) return;
     final sel = await c.selectMailbox(box);
-    final d = await Db.i.db;
-    final have =
-        (await d.rawQuery(
-              'SELECT COUNT(*) AS n FROM messages WHERE account_id=? AND folder=?',
-              [account.id, folder],
-            )).first['n']
-            as int;
-    if (have >= sel.messagesExists) return;
-    // Solo quelle che mancano: prima si richiedevano ogni volta anche tutte le già scaricate.
-    final fine = sel.messagesExists - have;
-    final inizio = fine - count + 1 < 1 ? 1 : fine - count + 1;
-    final list = await c.fetchMessageSequence(
-      em.MessageSequence.fromRange(inizio, fine),
-      mailbox: sel,
-      fetchPreference: em.FetchPreference.envelope,
-    );
+    if (sel.messagesExists == 0) return;
+    final low = await Db.i.lowestCachedUid(account.id!, folder, 1 << 30);
     final msgs = <Msg>[];
-    for (final m in list) {
-      if (m.uid != null) msgs.add(msgFromMime(account.id!, folder, m));
+    if (low == null) {
+      // Niente in copia: le ultime per posizione, come la prima sincronizzazione.
+      final list = await c.fetchMessages(
+        mailbox: sel,
+        count: count,
+        fetchPreference: em.FetchPreference.envelope,
+      );
+      for (final m in list) {
+        if (m.uid != null) msgs.add(msgFromMime(account.id!, folder, m));
+      }
+    } else {
+      var fine = low - 1;
+      var passo = count;
+      for (var giro = 0; giro < 5 && fine >= 1 && msgs.length < count; giro++) {
+        final inizio = fine - passo + 1 < 1 ? 1 : fine - passo + 1;
+        final list = await c.fetchMessageSequence(
+          em.MessageSequence.fromRange(inizio, fine, isUidSequence: true),
+          mailbox: sel,
+          fetchPreference: em.FetchPreference.envelope,
+        );
+        for (final m in list) {
+          if (m.uid != null) msgs.add(msgFromMime(account.id!, folder, m));
+        }
+        fine = inizio - 1;
+        passo *= 4;
+      }
     }
     await Db.i.upsertMessages(msgs);
   }
@@ -758,6 +854,8 @@ class ImapBackend implements MailBackend {
   @override
   Future<Msg> loadBody(Msg m) async {
     // Un corpo già salvato con immagini «cid:» ancora da mettere nel testo si riscarica una volta.
+    // Gli elenchi non portano il testo: si prende quello salvato (database o file).
+    await Db.i.conCorpo(m);
     final cached = m.bodyText != null || m.bodyHtml != null;
     if (cached && !_hasCidImg(m.bodyHtml)) return m;
     final mime = await _full(m.folder, m.uid);
@@ -766,11 +864,12 @@ class ImapBackend implements MailBackend {
       // Se no si vedeva «messaggio vuoto», senza capire perché.
       throw StateError('Questa email non è più sul server.');
     }
-    final text = mime.decodeTextPlainPart();
-    var html = mime.decodeTextHtmlPart();
+    final text = testoParte(mime, html: false);
+    var html = testoParte(mime, html: true);
     final fresh = msgFromMime(account.id!, m.folder, mime);
     // L'anteprima si assegna subito: la notifica la legge anche se le immagini non si scaricano.
     if (fresh.preview.isNotEmpty) m.preview = fresh.preview;
+    final cidNelTesto = cidUsati(html);
     if (html != null) {
       try {
         html = await SignatureTools.inlineCid(
@@ -778,6 +877,33 @@ class ImapBackend implements MailBackend {
           (cid) async => _cidPart(mime, cid),
         );
       } catch (_) {}
+      // Un'immagine «cid:» che nell'email non c'è resterebbe «cid:» e farebbe riscaricare
+      // l'email intera a ogni apertura: diventa un'immagine vuota.
+      if (_hasCidImg(html)) {
+        html = html!.replaceAllMapped(
+          RegExp(r'''(<img\b[^>]*\bsrc\s*=\s*["'])\s*cid:[^"']*''', caseSensitive: false),
+          (m) => '${m.group(1)}data:,',
+        );
+      }
+    }
+    // Immagini attaccate «dentro il testo» che il testo non usa (iPhone e Outlook a volte
+    // scrivono solo «[image0.jpeg]»): come Gmail e K-9 si mostrano in fondo all'email e
+    // fra gli allegati. Prima sparivano del tutto (09.11.2026).
+    final orfane = immaginiNonUsate(mime, cidNelTesto);
+    print('DIGIMAIL-T parti ${descriviParti(mime)} nel testo=${cidNelTesto.length} in fondo=${orfane.length}');
+    if (orfane.isNotEmpty) {
+      final buf = StringBuffer(
+        (html ?? '').trim().isNotEmpty
+            ? html!
+            : '<div style="font-family:sans-serif-light,sans-serif;font-size:17px;line-height:1.62;padding:0 16px">${plainToHtml(text ?? '')}</div>',
+      );
+      for (final o in orfane) {
+        buf.write(
+          '<p style="padding:0 16px"><img data-digimail-allegato="${o.cid}" style="max-width:100%;height:auto" '
+          'src="data:${o.tipo};base64,${base64.encode(o.dati)}"></p>',
+        );
+      }
+      html = buf.toString();
     }
     await Db.i.saveBody(
       account.id!,
@@ -785,6 +911,8 @@ class ImapBackend implements MailBackend {
       m.uid,
       text: text ?? '',
       html: html ?? '',
+      // Email davvero vuota: si segna come scaricata, se no si richiedeva a ogni apertura.
+      vuotaOk: (text ?? '').isEmpty && (html ?? '').isEmpty,
       preview: fresh.preview,
       listUnsub: fresh.listUnsub,
       listUnsubPost: fresh.listUnsubPost,
@@ -830,7 +958,8 @@ class ImapBackend implements MailBackend {
       mime = await _full(m.folder, m.uid);
     }
     if (mime == null) return [];
-    final infos = attachmentInfos(mime);
+    await Db.i.conCorpo(m);
+    final infos = attachmentInfos(mime, mostraCid: cidMessiInFondo(m.bodyHtml));
     if (infos.isNotEmpty && !m.hasAtt) {
       m.hasAtt = true;
       await Db.i.upsertMessages([msgFromMime(account.id!, m.folder, mime)]);
@@ -1491,6 +1620,10 @@ String friendlyError(Object e) {
     return 'Il server non risponde in tempo.';
   if (s.contains('HandshakeException') || s.contains('CERTIFICATE'))
     return 'Certificato del server non valido.';
+  // Un'email scritta in un formato che non si riesce a leggere: niente codice tecnico.
+  if (e is FormatException || e is RangeError || s.contains('DatabaseException')) {
+    return 'Questa email non si riesce a leggere sul telefono. Puoi aprirla da Outlook o dal sito della casella.';
+  }
   return s.length > 200 ? '${s.substring(0, 200)}…' : s;
 }
 

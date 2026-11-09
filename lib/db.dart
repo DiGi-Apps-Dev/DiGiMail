@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'dart:async';
+import 'dart:io';
 
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import 'models.dart';
@@ -49,7 +51,7 @@ class Db {
     final path = p.join(await getDatabasesPath(), 'digimail.db');
     final d = await openDatabase(
       path,
-      version: 7,
+      version: 9,
       onCreate: _create,
       onUpgrade: _upgrade,
       // Una versione più vecchia dell'app si deve aprire: le aggiunte fatte finora sono solo colonne e indici.
@@ -118,6 +120,27 @@ class Db {
       await d.execute("ALTER TABLE messages ADD COLUMN refs TEXT DEFAULT ''");
     }
     if (from < 7) await _createIndici(d);
+    // Versione 8 (1.0.76): un corpo oltre il limite di Android (2 MB per riga) bloccava
+    // l'elenco intero (09.11.2026). Si toglie: l'email si riscarica all'apertura e il
+    // testo grande va in un file a parte.
+    if (from < 8) {
+      for (final c in ['body_html', 'body_text']) {
+        try {
+          await d.rawUpdate(
+            'UPDATE messages SET $c=NULL WHERE length($c)>?',
+            [maxCorpoInRiga],
+          );
+        } catch (_) {}
+      }
+    }
+    // Versione 9 (1.0.77): le immagini attaccate «dentro il testo» ma non usate dal testo
+    // ora si mostrano in fondo all'email. I testi già salvati non le hanno: si rileggono
+    // dal server alla prossima apertura di ogni email.
+    if (from < 9) {
+      try {
+        await d.rawUpdate('UPDATE messages SET body_text=NULL, body_html=NULL');
+      } catch (_) {}
+    }
   }
 
   /// Versione 7: indici per le ricerche fatte di continuo, che leggevano tutta la tabella.
@@ -275,6 +298,7 @@ class Db {
     final now = DateTime.now().millisecondsSinceEpoch;
     final rows = await d.query(
       'messages',
+      columns: colonneElenco,
       where:
           'account_id=? AND folder=? AND (snoozed_until IS NULL OR snoozed_until<=?)',
       whereArgs: [accountId, folder, now],
@@ -290,6 +314,7 @@ class Db {
     final now = DateTime.now().millisecondsSinceEpoch;
     final rows = await d.query(
       'messages',
+      columns: colonneElenco,
       where: 'account_id=? AND snoozed_until IS NOT NULL AND snoozed_until>?',
       whereArgs: [accountId, now],
       orderBy: 'snoozed_until',
@@ -301,10 +326,104 @@ class Db {
     final d = await db;
     final rows = await d.query(
       'messages',
+      columns: colonneElenco,
       where: 'account_id=? AND folder=? AND uid=?',
       whereArgs: [accountId, folder, uid],
     );
-    return rows.isEmpty ? null : Msg.fromRow(rows.first);
+    return rows.isEmpty ? null : conCorpo(Msg.fromRow(rows.first));
+  }
+
+  // ---------- corpo delle email ----------
+  //
+  // Come K-9 Mail: gli elenchi non leggono mai il testo delle email (una sola email
+  // pesante oltre i 2 MB per riga di Android svuotava la Posta in entrata,
+  // 09.11.2026). Il testo si legge solo quando si apre l'email, una colonna alla volta;
+  // quelli più grandi di [maxCorpoInRiga] caratteri stanno in un file a parte.
+
+  /// Colonne degli elenchi: tutto tranne i testi, più «ha già il testo» e un pezzo
+  /// iniziale del testo semplice per la ricerca dell'assistente.
+  static const colonneElenco = [
+    'account_id', 'folder', 'uid', 'message_id', 'from_name', 'from_addr',
+    'to_addrs', 'cc_addrs', 'subject', 'date', 'preview', 'seen', 'flagged',
+    'answered', 'has_att', 'list_unsub', 'list_unsub_post', 'auth_results',
+    'snoozed_until', 'notified', 'reply_to', 'refs',
+    '(body_text IS NOT NULL OR body_html IS NOT NULL) AS has_body',
+    'substr(body_text, 1, 4000) AS body_head',
+  ];
+
+  static const maxCorpoInRiga = 300000;
+  static const segnoCorpoInFile = '@@DIGIMAIL-CORPO-IN-FILE@@';
+
+  /// Solo per i test: cartella dei testi grandi (sul telefono è quella dell'app).
+  static Directory? cartellaCorpiPerTest;
+
+  Future<Directory> _cartellaCorpi() async {
+    final base = cartellaCorpiPerTest ??
+        Directory(p.join((await getApplicationDocumentsDirectory()).path, 'corpi'));
+    if (!await base.exists()) await base.create(recursive: true);
+    return base;
+  }
+
+  String _nomeFile(int accountId, String folder, int uid, String tipo) =>
+      '${accountId}_${base64Url.encode(utf8.encode(folder)).replaceAll('=', '')}_$uid.$tipo';
+
+  Future<String> _inRigaOFile(
+    int accountId,
+    String folder,
+    int uid,
+    String tipo,
+    String testo,
+  ) async {
+    if (testo.length <= maxCorpoInRiga) return testo;
+    final f = File(
+      p.join((await _cartellaCorpi()).path, _nomeFile(accountId, folder, uid, tipo)),
+    );
+    await f.writeAsString(testo, flush: true);
+    return segnoCorpoInFile;
+  }
+
+  /// Aggiunge al messaggio il testo già salvato (dal database o dal file). Se il testo
+  /// non si trova più, il messaggio risulta senza testo e l'app lo riscarica.
+  Future<Msg> conCorpo(Msg m) async {
+    if (!m.hasBody || m.bodyText != null || m.bodyHtml != null) return m;
+    final d = await db;
+    for (final c in ['body_text', 'body_html']) {
+      String? v;
+      try {
+        final r = await d.query(
+          'messages',
+          columns: [c],
+          where: 'account_id=? AND folder=? AND uid=?',
+          whereArgs: [m.accountId, m.folder, m.uid],
+        );
+        v = r.isEmpty ? null : r.first[c] as String?;
+      } catch (_) {
+        // Riga ancora troppo grande: si toglie, l'email si riscarica.
+        try {
+          await d.rawUpdate(
+            'UPDATE messages SET $c=NULL WHERE account_id=? AND folder=? AND uid=?',
+            [m.accountId, m.folder, m.uid],
+          );
+        } catch (_) {}
+        v = null;
+      }
+      if (v == segnoCorpoInFile) {
+        final f = File(
+          p.join(
+            (await _cartellaCorpi()).path,
+            _nomeFile(m.accountId, m.folder, m.uid, c == 'body_html' ? 'html' : 'txt'),
+          ),
+        );
+        v = await f.exists() ? await f.readAsString() : null;
+      }
+      if (c == 'body_text') {
+        m.bodyText = v;
+      } else {
+        m.bodyHtml = v;
+      }
+    }
+    if (m.bodyText == null && m.bodyHtml == null) m.hasBody = false;
+    return m;
   }
 
   /// Inserisce o aggiorna mantenendo corpo e rimando già salvati.
@@ -423,6 +542,7 @@ class Db {
     final d = await db;
     final rows = await d.query(
       'messages',
+      columns: colonneElenco,
       where: 'account_id=? AND notified=0',
       whereArgs: [accountId],
       orderBy: 'uid',
@@ -483,13 +603,28 @@ class Db {
     String? authResults,
     String? replyTo,
     String? refs,
+    bool vuotaOk = false,
   }) async {
     final d = await db;
     // Un secondo scaricamento decodificato male non azzera il corpo già salvato.
     final v = <String, Object?>{
-      if (text != null && text.isNotEmpty) 'body_text': text,
-      if (html != null && html.isNotEmpty) 'body_html': html,
+      if (text != null && text.isNotEmpty)
+        'body_text': await _inRigaOFile(accountId, folder, uid, 'txt', text),
+      if (html != null && html.isNotEmpty)
+        'body_html': await _inRigaOFile(accountId, folder, uid, 'html', html),
     };
+    // Email senza testo né HTML: si scrive un corpo vuoto, così «già scaricata» vale anche per lei.
+    if (vuotaOk && v.isEmpty) {
+      final r = await d.query(
+        'messages',
+        columns: ['body_text', 'body_html'],
+        where: 'account_id=? AND folder=? AND uid=?',
+        whereArgs: [accountId, folder, uid],
+      );
+      if (r.isNotEmpty && r.first['body_text'] == null && r.first['body_html'] == null) {
+        v['body_text'] = '';
+      }
+    }
     if (replyTo != null && replyTo.isNotEmpty) v['reply_to'] = replyTo;
     if (refs != null && refs.isNotEmpty) v['refs'] = refs;
     if (preview != null && preview.isNotEmpty) v['preview'] = preview;
@@ -534,6 +669,7 @@ class Db {
     final d = await db;
     final rows = await d.query(
       'messages',
+      columns: colonneElenco,
       where: 'account_id=? AND message_id=?',
       whereArgs: [accountId, messageId],
     );
@@ -827,6 +963,7 @@ class Db {
     final like = '%${q.replaceAll('%', '').replaceAll('_', '')}%';
     final rows = await d.query(
       'messages',
+      columns: colonneElenco,
       where:
           '(subject LIKE ? OR from_name LIKE ? OR from_addr LIKE ? OR preview LIKE ? OR body_text LIKE ?)${accountId != null ? ' AND account_id=?' : ''}',
       whereArgs: [
@@ -848,6 +985,7 @@ class Db {
     final d = await db;
     final rows = await d.query(
       'messages',
+      columns: colonneElenco,
       where: 'date>=? AND UPPER(folder)=\'INBOX\'',
       whereArgs: [t.millisecondsSinceEpoch],
       orderBy: 'date DESC',
@@ -861,6 +999,7 @@ class Db {
     final d = await db;
     final rows = await d.query(
       'messages',
+      columns: colonneElenco,
       where: 'snoozed_until IS NOT NULL AND snoozed_until<=?',
       whereArgs: [DateTime.now().millisecondsSinceEpoch],
     );
@@ -1112,7 +1251,7 @@ class Db {
     final d = await db;
     return d.query(
       'scheduled',
-      where: "status IN ('pending','sending','failed')",
+      where: "status IN ('pending','sending','failed','editing')",
       orderBy: 'send_at',
     );
   }
@@ -1132,6 +1271,34 @@ class Db {
       whereArgs: [id],
     );
     notifyChanged();
+  }
+
+  /// Mette un invio programmato «in modifica» (Scrivi aperto su di lui): non parte finché non
+  /// torna «pending». False se nel frattempo è già partito.
+  Future<bool> claimEditing(int id) async {
+    final d = await db;
+    final n = await d.update(
+      'scheduled',
+      {'status': 'editing', 'claimed': DateTime.now().millisecondsSinceEpoch},
+      where: "id=? AND status IN ('pending','failed')",
+      whereArgs: [id],
+    );
+    if (n == 1) notifyChanged();
+    return n == 1;
+  }
+
+  /// Un invio rimasto «in modifica» da oltre 2 ore (app chiusa con Scrivi aperto) torna in coda.
+  Future<void> releaseStaleEditing() async {
+    final d = await db;
+    final limite =
+        DateTime.now().subtract(const Duration(hours: 2)).millisecondsSinceEpoch;
+    final n = await d.update(
+      'scheduled',
+      {'status': 'pending'},
+      where: "status='editing' AND (claimed IS NULL OR claimed<?)",
+      whereArgs: [limite],
+    );
+    if (n > 0) notifyChanged();
   }
 
   /// Prende in carico un invio: restituisce false se un altro processo l'ha già preso.

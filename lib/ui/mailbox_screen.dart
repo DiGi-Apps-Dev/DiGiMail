@@ -397,6 +397,8 @@ class _MailboxScreenState extends State<MailboxScreen>
         : (long ? s.swipeLongLeft : s.swipeShortLeft);
     if (act == Act.none) return false;
     if (act == Act.reply || act == Act.replyAll || act == Act.forward) {
+      // L'elenco non porta il testo: serve per citarlo nella risposta.
+      await Db.i.conCorpo(m);
       final init = ComposeInit.from(a, m, act);
       if (act == Act.forward && m.hasAtt) {
         try {

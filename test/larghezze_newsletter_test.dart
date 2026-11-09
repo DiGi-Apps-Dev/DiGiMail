@@ -1,48 +1,47 @@
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
-import 'package:digimail/ops.dart';
-
-const _t = 'Hai una nuova notifica da parte di un utente che ti segue';
-
-final _casi = <String, String>{
-  'tabella fissa da 1 px': '<table role="presentation" width="100%" style="table-layout:fixed"><tr><td style="width:1px;padding:0 24px">$_t</td></tr></table>',
-  'riquadro inline-block da 1 px': '<div style="display:inline-block;width:100%;max-width:600px"><div style="display:inline-block;width:1px">$_t</div></div>',
-  'colonne al 5%': '<table style="width:100%;max-width:600px"><tr><td style="width:5%"></td><td style="width:90%"><span>$_t</span></td><td style="width:5%"></td></tr></table>',
-  'tabella da 600 px': '<table width="600" style="min-width:600px"><tr><td width="1">$_t</td></tr></table>',
-};
+import 'package:digimail/ui/email_web.dart';
 
 void main() {
-  for (final e in _casi.entries) {
-    testWidgets('si adatta al telefono: ${e.key}', (t) async {
-      t.view.physicalSize = const Size(360 * 2.625, 900);
-      t.view.devicePixelRatio = 2.625;
-      addTearDown(t.view.reset);
-      final c = Ops.cleanHtml(e.value, blockImages: false, blockTracking: true).html;
-      await t.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: SingleChildScrollView(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: HtmlWidget(c, key: const Key('h')),
-            ),
-          ),
-        ),
-      ));
-      await t.pumpAndSettle();
-      final s = t.getSize(find.byKey(const Key('h')));
-      expect(s.width, 328);
-      expect(s.height, lessThan(200), reason: 'testo in colonna stretta');
-    });
-  }
+  test('pagina per il motore del browser: niente script, stili e struttura tenuti, viewport del telefono', () {
+    const email =
+        '<html><head><style>.x{color:red}</style><script>alert(1)</script></head>'
+        '<body bgcolor="#f4f4f4" style="margin:0"><table width="600"><tr><td class="x">Ciao</td></tr></table>'
+        '<script>rubaDati()</script></body></html>';
+    final p = EmailWeb.pagina(email);
+    expect(p, isNot(contains('alert(1)')));
+    expect(p, isNot(contains('rubaDati')));
+    expect(p, contains('.x{color:red}'));
+    expect(p, contains('bgcolor="#f4f4f4"'));
+    expect(p, contains('<table width="600">'));
+    expect(p, contains('name="viewport" content="width=device-width"'));
+    // La testa aggiunta sta dentro <head>, una volta sola.
+    expect('width=device-width'.allMatches(p).length, 1);
+    expect(p.indexOf('<meta name="viewport"'), greaterThan(p.indexOf('<head>')));
+    expect(p.indexOf('<meta name="viewport"'), lessThan(p.indexOf('</head>')));
+  });
 
-  test('le immagini tengono la loro larghezza', () {
-    final h = Ops.cleanHtml(
-      '<table width="600"><tr><td><img src="cid:logo" width="193"></td></tr></table>',
-      blockImages: false,
-      blockTracking: true,
-    ).html;
-    expect(h, contains('width="193"'));
-    expect(h, isNot(contains('width="600"')));
+  test('email senza html e body: il testo resta tutto, in una pagina intera', () {
+    final p = EmailWeb.pagina('<p>Ciao</p><p>Secondo</p>');
+    expect(p, contains('<p>Ciao</p><p>Secondo</p>'));
+    expect(p, startsWith('<!doctype html>'));
+    expect(p, contains('name="viewport"'));
+  });
+
+  test('email che vieta lo zoom: la nostra riga viene dopo la sua e vince; niente meta refresh', () {
+    const email =
+        '<html><head><meta name="viewport" content="width=device-width, maximum-scale=1, user-scalable=no">'
+        '<meta http-equiv="refresh" content="0;url=https://x.example">'
+        '</head><body>x</body></html>';
+    final p = EmailWeb.pagina(email);
+    expect(p, isNot(contains('http-equiv="refresh"')));
+    expect(
+      p.lastIndexOf('content="width=device-width">'),
+      greaterThan(p.indexOf('user-scalable=no')),
+    );
+  });
+
+  test('email con <html> ma senza <head>: la testa viene aggiunta', () {
+    final p = EmailWeb.pagina('<html><body>x</body></html>');
+    expect(p, contains('<html><head><meta charset="utf-8"><meta name="viewport"'));
   });
 }

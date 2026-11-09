@@ -233,12 +233,14 @@ int folderDepth(Folder f, List<Folder> all) {
 }
 
 Future<List<Folder>> loadFolders(Account a) async {
-  // Se la prima richiesta fallisce (connessione morta) si riprova una volta da una connessione nuova.
+  // Se la prima richiesta fallisce (connessione morta) si riprova una volta da una connessione
+  // nuova. Si butta solo la connessione, non il backend: quello è lo stesso dell'elenco aperto e
+  // dell'ascolto, e toglierlo faceva fallire quello che stavano facendo.
   for (var i = 0; i < 2; i++) {
     try {
       return orderFolders(a, await Backends.of(a).folders());
     } catch (_) {
-      await Backends.forget(a.id!);
+      Backends.of(a).riparti();
     }
   }
   return const [Folder('INBOX', 'INBOX', 'inbox')];

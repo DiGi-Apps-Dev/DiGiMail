@@ -160,7 +160,7 @@ class SearchPlan {
     if (unread == true && m.seen) return false;
     if (text.isNotEmpty) {
       final hay =
-          '${m.subject} ${m.preview} ${m.fromName} ${m.fromAddr} ${m.bodyText ?? ''}'
+          '${m.subject} ${m.preview} ${m.fromName} ${m.fromAddr} ${m.bodyText ?? m.bodyHead}'
               .toLowerCase();
       final words = text
           .toLowerCase()

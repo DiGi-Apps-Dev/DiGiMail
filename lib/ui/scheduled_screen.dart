@@ -44,7 +44,9 @@ class _ScheduledScreenState extends State<ScheduledScreen> {
   Future<void> _edit(Map<String, Object?> r) async {
     final id = r['id'] as int;
     final p = _payload(r);
-    if (!await Ops.cancelQueued(id)) {
+    // Mentre si modifica, l'invio è «in modifica»: non parte e non sparisce. Prima passava
+    // da «annullato», che cancella la riga: uscendo senza inviare l'email era persa.
+    if (!await Db.i.claimEditing(id)) {
       if (mounted) showSnack(context, 'È già in invio.');
       return;
     }
@@ -54,8 +56,11 @@ class _ScheduledScreenState extends State<ScheduledScreen> {
       context,
       MaterialPageRoute(builder: (_) => ComposeScreen(init: init)),
     );
-    // Uscita senza inviare né salvare: l'invio programmato resta com'era, non sparisce.
-    if (!init.consumata) {
+    if (init.consumata) {
+      // Inviata, riprogrammata o salvata come bozza da Scrivi: quella vecchia non serve più.
+      await Db.i.setScheduledStatus(id, 'cancelled');
+    } else {
+      // Uscita senza inviare né salvare: l'invio programmato resta com'era, non sparisce.
       await Db.i.setScheduledStatus(id, 'pending');
       if (mounted) showSnack(context, 'L\'invio programmato è rimasto com\'era.');
     }
@@ -116,6 +121,8 @@ class _ScheduledScreenState extends State<ScheduledScreen> {
     final late = status == 'pending' && at.isBefore(DateTime.now());
     final label = status == 'failed'
         ? 'NON RIUSCITA'
+        : status == 'editing'
+        ? 'IN MODIFICA'
         : status == 'sending'
         ? 'IN INVIO'
         : late
@@ -151,11 +158,11 @@ class _ScheduledScreenState extends State<ScheduledScreen> {
               spacing: 8,
               children: [
                 OutlinedButton(
-                  onPressed: status == 'sending' ? null : () => _edit(r),
+                  onPressed: status == 'sending' || status == 'editing' ? null : () => _edit(r),
                   child: const Text('Modifica'),
                 ),
                 OutlinedButton(
-                  onPressed: status == 'sending' ? null : () => _sendNow(r),
+                  onPressed: status == 'sending' || status == 'editing' ? null : () => _sendNow(r),
                   child: Text(status == 'failed' ? 'Riprova' : 'Invia ora'),
                 ),
                 OutlinedButton(

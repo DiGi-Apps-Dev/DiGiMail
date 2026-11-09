@@ -1,5 +1,8 @@
 /// Rende cliccabili, nel testo di un'email, i link, gli indirizzi email e i
 /// numeri di telefono scritti come testo semplice. Non tocca i link che ci sono già.
+import 'package:html_unescape/html_unescape.dart';
+
+final _unescape = HtmlUnescape();
 
 final _skip = RegExp(r'^<(a|style|script|head|title|textarea)\b', caseSensitive: false);
 final _close = RegExp(r'^</(a|style|script|head|title|textarea)\s*>', caseSensitive: false);
@@ -62,13 +65,6 @@ String plainToHtml(String text) => linkify(
       .replaceAll('\n', '<br>'),
 );
 
-const _entita = {
-  'nbsp': ' ', 'amp': '&', 'lt': '<', 'gt': '>', 'quot': '"', 'apos': "'",
-  'agrave': 'à', 'egrave': 'è', 'eacute': 'é', 'igrave': 'ì', 'ograve': 'ò', 'ugrave': 'ù',
-  'Agrave': 'À', 'Egrave': 'È', 'Eacute': 'É', 'Igrave': 'Ì', 'Ograve': 'Ò', 'Ugrave': 'Ù',
-  'euro': '€', 'laquo': '«', 'raquo': '»', 'rsquo': '’', 'lsquo': '‘', 'ldquo': '“',
-  'rdquo': '”', 'ndash': '–', 'mdash': '—', 'hellip': '…', 'copy': '©',
-};
 
 /// Il testo di un'email solo HTML, per citarla, copiarla o mandarla all'IA: senza stili e script,
 /// a capo dove il testo va a capo, e con le lettere vere al posto di `&amp;` ed `&egrave;`.
@@ -83,16 +79,9 @@ String testoDaHtml(String html) => html
       '\n',
     )
     .replaceAll(RegExp(r'<[^>]+>'), '')
-    .replaceAllMapped(RegExp(r'&(#\d+|#x[0-9a-fA-F]+|[a-zA-Z]+);'), (m) {
-      final e = m[1]!;
-      if (e.startsWith('#')) {
-        final n = e.startsWith('#x')
-            ? int.tryParse(e.substring(2), radix: 16)
-            : int.tryParse(e.substring(1));
-        return n == null || n > 0x10FFFF ? m[0]! : String.fromCharCode(n);
-      }
-      return _entita[e] ?? m[0]!;
-    })
+    // Tutte le lettere scritte come `&ouml;`, `&ccedil;`, `&#8217;`: prima ne conosceva
+    // una ventina e le altre restavano scritte così nel testo citato e in quello per l'IA.
+    .replaceAllMapped(RegExp(r'&[#a-zA-Z0-9]+;'), (m) => _unescape.convert(m[0]!))
     .replaceAll(' ', ' ')
     .replaceAll(RegExp(r'[ \t\r\f]+'), ' ')
     .replaceAll(RegExp(r' ?\n ?'), '\n')

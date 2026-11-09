@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -50,9 +51,8 @@ Widget _nav(
   onTap: () => Navigator.push(c, MaterialPageRoute(builder: (_) => page())),
 );
 
-/// Impostazioni dell'app.
-/// Da aggiornare con `version` in pubspec.yaml: dice quale versione è sul telefono.
-const kVersione = '1.0.55';
+/// Impostazioni dell'app. La versione si legge dal pacchetto installato: la costante
+/// scritta a mano era rimasta a 1.0.55 per 14 versioni.
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -62,6 +62,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   List<Account> _acc = [];
+  String _versione = '';
 
   @override
   void initState() {
@@ -71,7 +72,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _load() async {
     final l = await Db.i.accounts();
-    if (mounted) setState(() => _acc = l);
+    var v = '';
+    try {
+      v = (await PackageInfo.fromPlatform()).version;
+    } catch (_) {}
+    if (mounted) {
+      setState(() {
+        _acc = l;
+        _versione = v;
+      });
+    }
   }
 
   @override
@@ -192,9 +202,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             'Caselle, password, firme e impostazioni in un file',
             () => const BackupScreen(),
           ),
-          const ListTile(
-            title: Text('DiGiMail $kVersione'),
-            subtitle: Text('Lingua: italiano'),
+          ListTile(
+            title: Text('DiGiMail $_versione'),
+            subtitle: const Text('Lingua: italiano'),
           ),
           const SizedBox(height: 30),
         ],

@@ -664,6 +664,7 @@ class Ops {
   /// Invia gli invii in coda arrivati a scadenza. Senza rete restano in coda e riprovano al giro dopo.
   static Future<int> processScheduled() async {
     await cleanOutbox();
+    await Db.i.releaseStaleEditing();
     for (final row in await Db.i.staleSending()) {
       await Notify.showInfo(
         'Invio interrotto',
@@ -827,7 +828,9 @@ class Ops {
   }
 
   static final _trackerHosts = RegExp(
-    r'(doubleclick|googleadservices|mailchimp\.com/track|list-manage\.com/track|sendgrid\.net/(wf|trk)|mandrillapp\.com/track|hubspot(email)?\.com|hs-analytics|mixpanel|segment\.io|pixel\.|/pixel|/track(ing)?/|open\.gif|/open\?|beacon|emltrk|mailtrack|bl\.io|ct\.sendgrid|click\.|e\.customeriomail|t\.sidekickopen|links\.|sp\.mail)',
+    // «click.» e «links.» non ci sono più: sono i domini da cui molte newsletter servono le
+    // immagini vere, non pixel spia (sparivano loghi e foto).
+    r'(doubleclick|googleadservices|mailchimp\.com/track|list-manage\.com/track|sendgrid\.net/(wf|trk)|mandrillapp\.com/track|hubspot(email)?\.com|hs-analytics|mixpanel|segment\.io|pixel\.|/pixel|/track(ing)?/|open\.gif|/open\?|beacon|emltrk|mailtrack|bl\.io|ct\.sendgrid|e\.customeriomail|t\.sidekickopen|sp\.mail)',
     caseSensitive: false,
   );
 
@@ -870,69 +873,8 @@ class Ops {
         return tag;
       },
     );
-    return (html: _readable(out), blocked: blocked);
+    return (html: out, blocked: blocked);
   }
-
-  /// Testo sempre nero su bianco, allineato a sinistra e con interlinea normale,
-  /// qualunque cosa chieda il grafico della newsletter.
-  static String _readable(String html) {
-    var h = html;
-    h = h.replaceAll(
-      RegExp(
-        r'''(?<![-\w])(color|background-color|background|line-height|text-align)\s*:\s*[^;"'>]+;?''',
-        caseSensitive: false,
-      ),
-      '',
-    );
-    h = h.replaceAll(
-      RegExp(
-        r'''\s(bgcolor|color|align)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)''',
-        caseSensitive: false,
-      ),
-      '',
-    );
-    return _adattaLarghezze(h);
-  }
-
-  /// Le newsletter fissano larghezze da computer (600 px) o minuscole (1 px) su
-  /// tabelle e riquadri: sul telefono il testo finiva una lettera per riga.
-  /// Fuori dalle immagini le larghezze si tolgono e le tabelle prendono tutta
-  /// la larghezza disponibile.
-  static String _adattaLarghezze(String html) => html.replaceAllMapped(
-    RegExp(
-      r'<(table|tbody|thead|tfoot|tr|td|th|div|span|p|center|font|section|article|a|h[1-6]|ul|ol|li|blockquote)\b([^>]*)>',
-      caseSensitive: false,
-    ),
-    (m) {
-      final tag = m.group(1)!;
-      var attrs = m.group(2)!;
-      attrs = attrs.replaceAll(
-        RegExp(
-          r'''\s(width|height)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)''',
-          caseSensitive: false,
-        ),
-        '',
-      );
-      attrs = attrs.replaceAllMapped(
-        RegExp(r'''style\s*=\s*("([^"]*)"|'([^']*)')''', caseSensitive: false),
-        (s) {
-          final q = s.group(1)![0];
-          final css = (s.group(2) ?? s.group(3))!
-              .split(';')
-              .where(
-                (d) => !RegExp(
-                  r'^\s*(width|min-width|max-width|min-height|height|table-layout|float)\s*:',
-                  caseSensitive: false,
-                ).hasMatch(d),
-              )
-              .join(';');
-          return 'style=$q$css$q';
-        },
-      );
-      final tabella = tag.toLowerCase() == 'table';
-      return '<$tag$attrs${tabella ? ' width="100%"' : ''}>';
-    },
-  );
 
   /// Citazione per risposte e inoltri.
   static String quote(Msg m, String body) {

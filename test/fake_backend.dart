@@ -81,6 +81,7 @@ class FakeBackend implements MailBackend {
 
   @override
   Future<Msg> loadBody(Msg m) async {
+    await Db.i.conCorpo(m);
     m.bodyText ??=
         'Testo di prova del messaggio ${m.uid}.\n\nCordiali saluti\nMario Rossi';
     m.bodyHtml ??= '';
