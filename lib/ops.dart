@@ -891,8 +891,48 @@ class Ops {
       ),
       '',
     );
-    return h;
+    return _adattaLarghezze(h);
   }
+
+  /// Le newsletter fissano larghezze da computer (600 px) o minuscole (1 px) su
+  /// tabelle e riquadri: sul telefono il testo finiva una lettera per riga.
+  /// Fuori dalle immagini le larghezze si tolgono e le tabelle prendono tutta
+  /// la larghezza disponibile.
+  static String _adattaLarghezze(String html) => html.replaceAllMapped(
+    RegExp(
+      r'<(table|tbody|thead|tfoot|tr|td|th|div|span|p|center|font|section|article|a|h[1-6]|ul|ol|li|blockquote)\b([^>]*)>',
+      caseSensitive: false,
+    ),
+    (m) {
+      final tag = m.group(1)!;
+      var attrs = m.group(2)!;
+      attrs = attrs.replaceAll(
+        RegExp(
+          r'''\s(width|height)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)''',
+          caseSensitive: false,
+        ),
+        '',
+      );
+      attrs = attrs.replaceAllMapped(
+        RegExp(r'''style\s*=\s*("([^"]*)"|'([^']*)')''', caseSensitive: false),
+        (s) {
+          final q = s.group(1)![0];
+          final css = (s.group(2) ?? s.group(3))!
+              .split(';')
+              .where(
+                (d) => !RegExp(
+                  r'^\s*(width|min-width|max-width|min-height|height|table-layout|float)\s*:',
+                  caseSensitive: false,
+                ).hasMatch(d),
+              )
+              .join(';');
+          return 'style=$q$css$q';
+        },
+      );
+      final tabella = tag.toLowerCase() == 'table';
+      return '<$tag$attrs${tabella ? ' width="100%"' : ''}>';
+    },
+  );
 
   /// Citazione per risposte e inoltri.
   static String quote(Msg m, String body) {

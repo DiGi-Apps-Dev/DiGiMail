@@ -24,14 +24,15 @@ import 'compose_screen.dart';
 import 'pickers.dart';
 import 'widgets.dart';
 
-/// Lettura di una email.
+/// Lettura di una email. Con l'elenco da cui si è arrivati, le email stanno una
+/// accanto all'altra come pagine: scorrendo a sinistra la seguente, a destra la
+/// precedente, e la vicina è già pronta mentre la si trascina.
 class MessageScreen extends StatefulWidget {
   final Account account;
   final Msg msg;
   final List<Folder> folders;
 
-  /// Le email dell'elenco da cui si è arrivati: scorrendo a destra o a sinistra
-  /// si passa alla precedente o alla seguente.
+  /// Le email dell'elenco da cui si è arrivati.
   final List<Msg> siblings;
   const MessageScreen({
     super.key,
@@ -41,10 +42,147 @@ class MessageScreen extends StatefulWidget {
     this.siblings = const [],
   });
   @override
-  State<MessageScreen> createState() => _MessageScreenState();
+  State<MessageScreen> createState() => _SfogliaState();
 }
 
-class _MessageScreenState extends State<MessageScreen> {
+class _SfogliaState extends State<MessageScreen> {
+  late final int _inizio = widget.siblings.indexWhere(
+    (x) => x.key == widget.msg.key,
+  );
+  late final PageController _pc = PageController(
+    initialPage: _inizio < 0 ? 0 : _inizio,
+  );
+  late int _corrente = _inizio;
+  final _chiavi = <int, GlobalKey<_LetturaState>>{};
+  GlobalKey<_LetturaState> _chiave(int i) =>
+      _chiavi.putIfAbsent(i, () => GlobalKey<_LetturaState>());
+  _LetturaState? get _davanti => _chiavi[_corrente]?.currentState;
+
+  @override
+  void dispose() {
+    _pc.dispose();
+    super.dispose();
+  }
+
+  /// Effetto «profondità»: l'email che si lascia resta ferma, si rimpicciolisce
+  /// e sfuma all'indietro, mentre l'altra le scorre sopra con un'ombra.
+  Widget _profondita(BuildContext context, int i, Widget child) {
+    final page = _pc.hasClients && _pc.position.haveDimensions
+        ? _pc.page!
+        : _inizio.toDouble();
+    final d = i - page;
+    if (d <= -1 || d >= 1 || d == 0) return child;
+    if (d < 0) {
+      final t = -d;
+      final w = MediaQuery.sizeOf(context).width;
+      return Transform.translate(
+        offset: Offset(w * t, 0),
+        child: Opacity(
+          opacity: 1 - 0.75 * t,
+          child: Transform.scale(scale: 1 - 0.22 * t, child: child),
+        ),
+      );
+    }
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        boxShadow: [
+          BoxShadow(
+            color: Color(0x73000000),
+            blurRadius: 24,
+            offset: Offset(-8, 0),
+          ),
+        ],
+      ),
+      child: child,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_inizio < 0) {
+      return _Lettura(
+        account: widget.account,
+        msg: widget.msg,
+        folders: widget.folders,
+      );
+    }
+    final st = _davanti;
+    // Al primo giro la pagina non esiste ancora: la barra in alto arriva subito dopo.
+    if (st == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
+    }
+    return Scaffold(
+      appBar: st?._barraAlta() ?? AppBar(flexibleSpace: const BrandBar()),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(child: _pagine()),
+            barraAzioni((act) => _davanti?._act(act)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _pagine() {
+    return PageView.builder(
+      controller: _pc,
+      // Prepara la seguente e la precedente mentre si legge questa.
+      allowImplicitScrolling: true,
+      itemCount: widget.siblings.length,
+      onPageChanged: (i) => setState(() => _corrente = i),
+      // Ogni email ha la sua barra: gli avvisi in basso compaiono in tutte, ma
+      // l'animazione la fa solo quella davanti (altrimenti Flutter si ferma).
+      itemBuilder: (_, i) => AnimatedBuilder(
+        animation: _pc,
+        builder: (context, child) => _profondita(context, i, child!),
+        // Fondo pieno: l'email che arriva copre quella che va indietro.
+        child: ColoredBox(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          child: HeroMode(
+            enabled: i == _corrente,
+            child: _Lettura(
+              key: _chiave(i),
+              incorporata: true,
+              account: widget.account,
+              msg: widget.siblings[i],
+              folders: widget.folders,
+              attiva: i == _corrente,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Una email aperta.
+class _Lettura extends StatefulWidget {
+  final Account account;
+  final Msg msg;
+  final List<Folder> folders;
+
+  /// Falsa per le vicine preparate in anticipo: non si segnano come lette e,
+  /// se sono bozze, non si aprono in Scrivi finché non sono davanti.
+  final bool attiva;
+  const _Lettura({
+    super.key,
+    required this.account,
+    required this.msg,
+    this.folders = const [],
+    this.attiva = true,
+    this.incorporata = false,
+  });
+
+  /// Dentro lo sfoglia: disegna solo il contenuto, le barre restano ferme fuori.
+  final bool incorporata;
+  @override
+  State<_Lettura> createState() => _LetturaState();
+}
+
+class _LetturaState extends State<_Lettura> {
   late Msg m;
   bool _loading = true;
   String? _error;
@@ -65,35 +203,25 @@ class _MessageScreenState extends State<MessageScreen> {
   }
 
   @override
+  void didUpdateWidget(covariant _Lettura old) {
+    super.didUpdateWidget(old);
+    if (widget.attiva == old.attiva || _loading) return;
+    if (widget.attiva) {
+      _davanti();
+    } else {
+      _readTimer?.cancel();
+      _readTimer = null;
+    }
+  }
+
+  @override
   void dispose() {
     _readTimer?.cancel();
     super.dispose();
   }
 
-  /// Scorrimento orizzontale: a sinistra l'email seguente (sotto nell'elenco), a destra la precedente.
-  void _swipeNav(DragEndDetails d) {
-    final v = d.primaryVelocity ?? 0;
-    if (v.abs() < 500 || widget.siblings.isEmpty) return;
-    final i = widget.siblings.indexWhere((x) => x.key == m.key);
-    if (i < 0) return;
-    final j = v < 0 ? i + 1 : i - 1;
-    if (j < 0 || j >= widget.siblings.length) return;
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (_) => MessageScreen(
-          account: a,
-          msg: widget.siblings[j],
-          folders: widget.folders,
-          siblings: widget.siblings,
-        ),
-      ),
-    );
-  }
-
-  bool get _isDraft => widget.folders.any(
-    (f) => f.path == m.folder && f.role == 'drafts',
-  );
+  bool get _isDraft =>
+      widget.folders.any((f) => f.path == m.folder && f.role == 'drafts');
 
   Future<void> _open() async {
     try {
@@ -103,6 +231,16 @@ class _MessageScreenState extends State<MessageScreen> {
       _error = friendlyError(e);
     }
     if (!mounted) return;
+    setState(() => _loading = false);
+    if (widget.attiva) _davanti();
+    // Dopo, non prima: l'elenco allegati aspetta in coda dietro alle sincronizzazioni, e il testo
+    // già sul telefono non deve aspettare con lui.
+    if (_error == null && !_isDraft) _caricaAllegati();
+  }
+
+  /// L'email è davanti agli occhi: si segna come letta, o se è una bozza si
+  /// riapre in Scrivi.
+  Future<void> _davanti() async {
     // Una bozza non si legge: si riapre in Scrivi per continuare.
     if (_error == null && _isDraft) {
       var files = <String>[];
@@ -111,7 +249,10 @@ class _MessageScreenState extends State<MessageScreen> {
           files = await Ops.forwardFiles(a, m);
         } catch (e) {
           if (mounted) {
-            showSnack(context, 'Gli allegati della bozza non si sono scaricati: ${friendlyError(e)}');
+            showSnack(
+              context,
+              'Gli allegati della bozza non si sono scaricati: ${friendlyError(e)}',
+            );
           }
         }
       }
@@ -130,11 +271,7 @@ class _MessageScreenState extends State<MessageScreen> {
       );
       return;
     }
-    setState(() => _loading = false);
     _scheduleRead();
-    // Dopo, non prima: l'elenco allegati aspetta in coda dietro alle sincronizzazioni, e il testo
-    // già sul telefono non deve aspettare con lui.
-    if (_error == null) _caricaAllegati();
   }
 
   Future<void> _caricaAllegati() async {
@@ -273,32 +410,33 @@ class _MessageScreenState extends State<MessageScreen> {
         ),
         duration: Duration(seconds: seconds),
         // Dal Cestino non si torna indietro: l'email è eliminata per sempre.
-        action: act == Act.delete && roleOfPath(widget.folders, m.folder) == 'trash'
+        action:
+            act == Act.delete && roleOfPath(widget.folders, m.folder) == 'trash'
             ? null
             : SnackBarAction(
-          label: 'Annulla',
-          onPressed: () async {
-            UndoFn? undo;
-            try {
-              undo = await lavoro;
-            } catch (_) {
-              // Il server ha rifiutato: l'email è già tornata e l'errore lo dice il blocco qui sotto.
-              return;
-            }
-            try {
-              await undo?.call();
-            } catch (e) {
-              messenger.hideCurrentSnackBar();
-              messenger.showSnackBar(
-                SnackBar(
-                  content: Text(
-                    'Non sono riuscito ad annullare: ${friendlyError(e)}',
-                  ),
-                ),
-              );
-            }
-          },
-        ),
+                label: 'Annulla',
+                onPressed: () async {
+                  UndoFn? undo;
+                  try {
+                    undo = await lavoro;
+                  } catch (_) {
+                    // Il server ha rifiutato: l'email è già tornata e l'errore lo dice il blocco qui sotto.
+                    return;
+                  }
+                  try {
+                    await undo?.call();
+                  } catch (e) {
+                    messenger.hideCurrentSnackBar();
+                    messenger.showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'Non sono riuscito ad annullare: ${friendlyError(e)}',
+                        ),
+                      ),
+                    );
+                  }
+                },
+              ),
       ),
     );
     try {
@@ -318,7 +456,10 @@ class _MessageScreenState extends State<MessageScreen> {
         init.files = await Ops.forwardFiles(a, m);
       } catch (e) {
         if (mounted) {
-          showSnack(context, 'Gli allegati non si sono scaricati: ${friendlyError(e)}');
+          showSnack(
+            context,
+            'Gli allegati non si sono scaricati: ${friendlyError(e)}',
+          );
         }
       }
     }
@@ -545,11 +686,11 @@ class _MessageScreenState extends State<MessageScreen> {
           HtmlWidget(
             linkify(cleaned.html),
             textStyle: TextStyle(
-          fontFamily: 'RobotoLight',
-          fontSize: 17,
-          color: fg,
-          height: 1.62,
-        ),
+              fontFamily: 'RobotoLight',
+              fontSize: 17,
+              color: fg,
+              height: 1.62,
+            ),
             // Outlook toglie lo spazio fra i paragrafi con un suo stile: qui va rifatto.
             customStylesBuilder: (e) =>
                 e.localName == 'p' && e.classes.contains('MsoNormal')
@@ -593,7 +734,8 @@ class _MessageScreenState extends State<MessageScreen> {
       final u = Uri.tryParse(t);
       final q = u?.queryParameters ?? const <String, String>{};
       List<String> lista(String v) => [
-        for (final x in v.split(',')) if (x.trim().isNotEmpty) x.trim(),
+        for (final x in v.split(','))
+          if (x.trim().isNotEmpty) x.trim(),
       ];
       await Navigator.push(
         context,
@@ -638,329 +780,322 @@ class _MessageScreenState extends State<MessageScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final s = Settings.i;
-    final tb = s.toolbar;
-    final sus = Ops.suspicion(m);
-    final canUnsub = Ops.canUnsubscribe(m);
+    if (widget.incorporata) return _corpo();
     return Scaffold(
-      appBar: AppBar(flexibleSpace: const BrandBar(), 
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
-        ),
-        actions: [
-          PopupMenuButton<String>(
-            onSelected: (v) async {
-              switch (v) {
-                case 'flag':
-                  await _act(Act.flag);
-                  break;
-                case 'read':
-                  await _act(Act.toggleRead);
-                  break;
-                case 'settings':
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
-                  );
-                  break;
-                case 'share':
-                  await SharePlus.instance.share(
-                    ShareParams(
-                      text: '${m.subject}\n\n$_plain',
-                      subject: m.subject,
-                    ),
-                  );
-                  break;
-                case 'copy':
-                  await Clipboard.setData(ClipboardData(text: _plain));
-                  if (mounted) showSnack(context, 'Testo copiato');
-                  break;
-                case 'ai':
-                  await _summarize();
-                  break;
-                case 'aireply':
-                  await _aiReply();
-                  break;
-                default:
-                  final act = Act.values.firstWhere((x) => x.name == v);
-                  await _act(act);
-              }
-            },
-            itemBuilder: (_) => [
-              PopupMenuItem(
-                value: 'flag',
-                child: Text(m.flagged ? 'Togli la stella' : 'Metti la stella'),
-              ),
-              PopupMenuItem(
-                value: 'read',
-                child: Text(
-                  m.seen ? 'Segna come non letta' : 'Segna come letta',
-                ),
-              ),
-              const PopupMenuItem(value: 'reply', child: Text('Rispondi')),
-              const PopupMenuItem(
-                value: 'replyAll',
-                child: Text('Rispondi a tutti'),
-              ),
-              const PopupMenuItem(value: 'forward', child: Text('Inoltra')),
-              const PopupMenuItem(value: 'move', child: Text('Sposta in…')),
-              const PopupMenuItem(value: 'snooze', child: Text('Rimanda')),
-              const PopupMenuItem(
-                value: 'spam',
-                child: Text('Segnala come spam'),
-              ),
-              const PopupMenuItem(
-                value: 'block',
-                child: Text('Blocca il mittente'),
-              ),
-              if (canUnsub)
-                const PopupMenuItem(
-                  value: 'unsubscribe',
-                  child: Text('Disiscriviti'),
-                ),
-              const PopupMenuItem(value: 'ai', child: Text('Riassumi con IA')),
-              const PopupMenuItem(
-                value: 'aireply',
-                child: Text('Rispondi con IA'),
-              ),
-              const PopupMenuItem(value: 'share', child: Text('Condividi')),
-              const PopupMenuItem(
-                value: 'settings',
-                child: Text('Impostazioni'),
-              ),
-              const PopupMenuItem(value: 'copy', child: Text('Copia il testo')),
-            ],
-          ),
-        ],
-      ),
+      appBar: _barraAlta(),
       body: SafeArea(
         child: Column(
           children: [
-            Expanded(
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onHorizontalDragEnd: _swipeNav,
-                child: ListView(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-                  children: [
-                    Text(
-                      m.subject.isEmpty ? '(senza oggetto)' : m.subject,
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w700,
-                        height: 1.3,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    InkWell(
-                      onTap: () => setState(() => _details = !_details),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          SenderAvatar(
-                            m.sender,
-                            a.color,
-                            size: 40,
-                            addr: m.fromAddr,
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text.rich(
-                                  TextSpan(
-                                    children: [
-                                      TextSpan(
-                                        text: m.sender,
-                                        style: const TextStyle(
-                                          fontSize: 17,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                      TextSpan(
-                                        text: '  ${formatDate(m.date)}',
-                                        style: const TextStyle(fontSize: 14),
-                                      ),
-                                    ],
-                                  ),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                const SizedBox(height: 6),
-                                Row(
-                                  children: [
-                                    Flexible(
-                                      child: Text(
-                                        'A: ${_toLabel()}',
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(fontSize: 14),
-                                      ),
-                                    ),
-                                    Icon(
-                                      _details
-                                          ? Icons.expand_less
-                                          : Icons.expand_more,
-                                      size: 24,
-                                    ),
-                                  ],
-                                ),
-                                if (_details) ...[
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    'Da: ${m.fromAddr}',
-                                    style: const TextStyle(fontSize: 15),
-                                  ),
-                                  Text(
-                                    'A: ${m.toAddrs.isEmpty ? a.address : m.toAddrs}',
-                                    style: const TextStyle(fontSize: 15),
-                                  ),
-                                  if (m.ccAddrs.isNotEmpty)
-                                    Text(
-                                      'Cc: ${m.ccAddrs}',
-                                      style: const TextStyle(fontSize: 15),
-                                    ),
-                                  Text(
-                                    formatFull(m.date),
-                                    style: const TextStyle(fontSize: 15),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (sus != null)
-                      Container(
-                        margin: const EdgeInsets.only(top: 12),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFDECEA),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: const Color(0xFFB3261E)),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(
-                              Icons.warning_amber_rounded,
-                              color: Color(0xFFB3261E),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                sus,
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    if (_summarizing)
-                      const Padding(
-                        padding: EdgeInsets.only(top: 10),
-                        child: LinearProgressIndicator(),
-                      ),
-                    if (_summary != null)
-                      Container(
-                        margin: const EdgeInsets.only(top: 10),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: kSfondoLeggero,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: SelectableText(
-                          _summary!,
-                          style: const TextStyle(fontSize: 16, height: 1.35),
-                        ),
-                      ),
-                    if (_atts.isNotEmpty) ...[
-                      const Divider(height: 24),
-                      for (final att in _atts)
-                        InkWell(
-                          onTap: () => _download(att),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                            child: Row(
-                              children: [
-                                const Icon(
-                                  Icons.description_outlined,
-                                  size: 30,
-                                ),
-                                const SizedBox(width: 14),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        att.name,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(fontSize: 17),
-                                      ),
-                                      Text(
-                                        formatSize(att.size),
-                                        style: const TextStyle(fontSize: 15),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const Icon(Icons.download, size: 30),
-                              ],
-                            ),
-                          ),
-                        ),
-                    ],
-                    const Divider(height: 28),
-                    if (_loading)
-                      const Padding(
-                        padding: EdgeInsets.all(30),
-                        child: Center(child: CircularProgressIndicator()),
-                      )
-                    else if (_error != null)
-                      Text(
-                        _error!,
-                        style: const TextStyle(
-                          color: Color(0xFFB3261E),
-                          fontWeight: FontWeight.w700,
-                          fontSize: 16,
-                        ),
-                      )
-                    else
-                      _body(),
-                  ],
-                ),
-              ),
-            ),
-            Container(
-              decoration: BoxDecoration(
-                gradient: kBarraGrad,
-                border: const Border(top: BorderSide(color: kContorno, width: 3)),
-              ),
-              child: IconTheme.merge(data: const IconThemeData(color: Colors.white), child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  for (final act in tb)
-                    IconButton(
-                      iconSize: 26,
-                      tooltip: actLabel[act],
-                      icon: Icon(actIcon(act)),
-                      onPressed: () => _act(act),
-                    ),
-                ],
-              )),
-            ),
+            Expanded(child: _corpo()),
+            barraAzioni(_act),
           ],
         ),
       ),
     );
   }
+
+  /// Barra in alto: indietro e menu dell'email.
+  PreferredSizeWidget _barraAlta() {
+    return AppBar(
+      flexibleSpace: const BrandBar(),
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back),
+        onPressed: () => Navigator.pop(context),
+      ),
+      actions: [
+        PopupMenuButton<String>(
+          onSelected: (v) async {
+            switch (v) {
+              case 'flag':
+                await _act(Act.flag);
+                break;
+              case 'read':
+                await _act(Act.toggleRead);
+                break;
+              case 'settings':
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                );
+                break;
+              case 'share':
+                await SharePlus.instance.share(
+                  ShareParams(
+                    text: '${m.subject}\n\n$_plain',
+                    subject: m.subject,
+                  ),
+                );
+                break;
+              case 'copy':
+                await Clipboard.setData(ClipboardData(text: _plain));
+                if (mounted) showSnack(context, 'Testo copiato');
+                break;
+              case 'ai':
+                await _summarize();
+                break;
+              case 'aireply':
+                await _aiReply();
+                break;
+              default:
+                final act = Act.values.firstWhere((x) => x.name == v);
+                await _act(act);
+            }
+          },
+          itemBuilder: (_) => [
+            PopupMenuItem(
+              value: 'flag',
+              child: Text(m.flagged ? 'Togli la stella' : 'Metti la stella'),
+            ),
+            PopupMenuItem(
+              value: 'read',
+              child: Text(m.seen ? 'Segna come non letta' : 'Segna come letta'),
+            ),
+            const PopupMenuItem(value: 'reply', child: Text('Rispondi')),
+            const PopupMenuItem(
+              value: 'replyAll',
+              child: Text('Rispondi a tutti'),
+            ),
+            const PopupMenuItem(value: 'forward', child: Text('Inoltra')),
+            const PopupMenuItem(value: 'move', child: Text('Sposta in…')),
+            const PopupMenuItem(value: 'snooze', child: Text('Rimanda')),
+            const PopupMenuItem(
+              value: 'spam',
+              child: Text('Segnala come spam'),
+            ),
+            const PopupMenuItem(
+              value: 'block',
+              child: Text('Blocca il mittente'),
+            ),
+            if (Ops.canUnsubscribe(m))
+              const PopupMenuItem(
+                value: 'unsubscribe',
+                child: Text('Disiscriviti'),
+              ),
+            const PopupMenuItem(value: 'ai', child: Text('Riassumi con IA')),
+            const PopupMenuItem(
+              value: 'aireply',
+              child: Text('Rispondi con IA'),
+            ),
+            const PopupMenuItem(value: 'share', child: Text('Condividi')),
+            const PopupMenuItem(value: 'settings', child: Text('Impostazioni')),
+            const PopupMenuItem(value: 'copy', child: Text('Copia il testo')),
+          ],
+        ),
+      ],
+    );
+  }
+
+  /// Il contenuto dell'email, la sola parte che scorre fra un'email e l'altra.
+  Widget _corpo() {
+    final sus = Ops.suspicion(m);
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+      children: [
+        Text(
+          m.subject.isEmpty ? '(senza oggetto)' : m.subject,
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w700,
+            height: 1.3,
+          ),
+        ),
+        const SizedBox(height: 8),
+        InkWell(
+          onTap: () => setState(() => _details = !_details),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SenderAvatar(m.sender, a.color, size: 40, addr: m.fromAddr),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(
+                            text: m.sender,
+                            style: const TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          TextSpan(
+                            text: '  ${formatDate(m.date)}',
+                            style: const TextStyle(fontSize: 14),
+                          ),
+                        ],
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            'A: ${_toLabel()}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 14),
+                          ),
+                        ),
+                        Icon(
+                          _details ? Icons.expand_less : Icons.expand_more,
+                          size: 24,
+                        ),
+                      ],
+                    ),
+                    if (_details) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'Da: ${m.fromAddr}',
+                        style: const TextStyle(fontSize: 15),
+                      ),
+                      Text(
+                        'A: ${m.toAddrs.isEmpty ? a.address : m.toAddrs}',
+                        style: const TextStyle(fontSize: 15),
+                      ),
+                      if (m.ccAddrs.isNotEmpty)
+                        Text(
+                          'Cc: ${m.ccAddrs}',
+                          style: const TextStyle(fontSize: 15),
+                        ),
+                      Text(
+                        formatFull(m.date),
+                        style: const TextStyle(fontSize: 15),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (sus != null)
+          Container(
+            margin: const EdgeInsets.only(top: 12),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFDECEA),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFB3261E)),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.warning_amber_rounded,
+                  color: Color(0xFFB3261E),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    sus,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        if (_summarizing)
+          const Padding(
+            padding: EdgeInsets.only(top: 10),
+            child: LinearProgressIndicator(),
+          ),
+        if (_summary != null)
+          Container(
+            margin: const EdgeInsets.only(top: 10),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: kSfondoLeggero,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: SelectableText(
+              _summary!,
+              style: const TextStyle(fontSize: 16, height: 1.35),
+            ),
+          ),
+        if (_atts.isNotEmpty) ...[
+          const Divider(height: 24),
+          for (final att in _atts)
+            InkWell(
+              onTap: () => _download(att),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(
+                  children: [
+                    const Icon(Icons.description_outlined, size: 30),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            att.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 17),
+                          ),
+                          Text(
+                            formatSize(att.size),
+                            style: const TextStyle(fontSize: 15),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.download, size: 30),
+                  ],
+                ),
+              ),
+            ),
+        ],
+        const Divider(height: 28),
+        if (_loading)
+          const Padding(
+            padding: EdgeInsets.all(30),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (_error != null)
+          Text(
+            _error!,
+            style: const TextStyle(
+              color: Color(0xFFB3261E),
+              fontWeight: FontWeight.w700,
+              fontSize: 16,
+            ),
+          )
+        else
+          _body(),
+      ],
+    );
+  }
 }
+
+/// Barra in basso con le azioni scelte nelle impostazioni.
+Widget barraAzioni(void Function(Act) onAct) => Container(
+  decoration: BoxDecoration(
+    gradient: kBarraGrad,
+    border: const Border(top: BorderSide(color: kContorno, width: 3)),
+  ),
+  child: IconTheme.merge(
+    data: const IconThemeData(color: Colors.white),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: [
+        for (final act in Settings.i.toolbar)
+          IconButton(
+            iconSize: 26,
+            tooltip: actLabel[act],
+            icon: Icon(actIcon(act)),
+            onPressed: () => onAct(act),
+          ),
+      ],
+    ),
+  ),
+);

@@ -864,14 +864,14 @@ void main() {
       await t.fling(find.byType(ListView).first, const Offset(-400, 0), 2000);
       await settle(t);
       expect(
-        find.text(list[2].subject),
+        find.text(list[2].subject).hitTestable(),
         findsWidgets,
         reason: 'sinistra = seguente',
       );
       await t.fling(find.byType(ListView).first, const Offset(400, 0), 2000);
       await settle(t);
       expect(
-        find.text(list[1].subject),
+        find.text(list[1].subject).hitTestable(),
         findsWidgets,
         reason: 'destra = precedente',
       );
