@@ -720,7 +720,7 @@ class ImapBackend implements MailBackend {
     int belowUid,
   ) async {
     final last = _deepAt[folder];
-    if (last != null && DateTime.now().difference(last) < const Duration(minutes: 10)) {
+    if (last != null && DateTime.now().difference(last) < const Duration(minutes: 2)) {
       return;
     }
     try {
@@ -749,10 +749,11 @@ class ImapBackend implements MailBackend {
           }
         }
       }
-      // Una risposta vuota non cancella niente: potrebbe essere una risposta illeggibile.
-      if (server.isNotEmpty) {
-        await Db.i.reconcileOlder(accId, folder, belowUid, server);
-      }
+      // Una risposta vuota vale solo se le ultime email della stessa cartella sono state lette
+      // senza errori in questo giro (chiamata solo con `recent` non vuota): se sul server non c'è
+      // più nessuna delle vecchie (Cestino svuotato dal PC), vanno tolte anche dal telefono.
+      // Se invece la lettura ha dato un errore si è già usciti dal `catch`.
+      await Db.i.reconcileOlder(accId, folder, belowUid, server);
       _deepAt[folder] = DateTime.now();
     } catch (_) {}
   }
